@@ -69,6 +69,76 @@ slot 0.
 
 ## Architecture
 
+### End-to-end overview
+
+Two hosts plus one MCU plus one panel, joined by three network hops.
+
+```
+[Cloud devbox WSL]                [Home laptop WSL]            [Home LAN]
+ Claude Code                       Flask server :5000           S3 Matrix Portal
+   │ hook fires                      ↑    state.json (disk)       ↑   2.4GHz WiFi
+   notify.sh                         │                            │
+   curl POST ─── Tailscale ──────────┘                            │
+                                     │                            │
+                                     └── mirrored mode +          │
+                                         Defender rule ───────────┘
+                                         (192.168.88.0/24 scoped)
+                                                                  │
+                                                                  ↓ HUB75 16-pin ribbon
+                                                              [32×32 RGB panel]
+                                                              5V wall adapter
+                                                              + 4700µF cap
+```
+
+**Data flow per Claude turn.**
+
+1. User submits prompt → `UserPromptSubmit` hook → `notify.sh pending`
+   → POST `/session {id, state=working, pending=true}` over Tailscale to
+   the laptop.
+2. Claude responds → `Stop` hook → `notify.sh stopped` → reads the
+   transcript, groups assistant messages by preceding user uuid, computes
+   `{msg_id, tokens, added, removed, ts}` per turn (last 16), POSTs
+   `/session {id, state=stopped, pending=false, turns}`. Idempotent
+   upsert on `msg_id` via max-merge.
+3. Server writes `state.json` atomically, leases a palette idx via
+   `_assign_color_indices`, append-only audit log of color changes to
+   the systemd journal.
+4. S3 polls `GET /sessions` every 500ms via `adafruit_requests` over
+   WiFi → JSON → `render_frame()` → `Canvas.SetPixel(x,y,r,g,b)` →
+   `displayio.Bitmap[x,y] = palette_idx` (with `BRIGHTNESS_PCT` baked
+   into the palette entry).
+5. `display.refresh()` → `rgbmatrix` driver → HUB75 GPIO bit-bang →
+   panel LEDs.
+
+**Persistence and recovery.** Laptop reboot → Windows Task Scheduler
+fires `wsl.exe --exec sleep infinity` at login → WSL boots → systemd
+PID 1 → `claudergbmatrix.service` starts (linger enabled) → Flask
+listens → the S3's ongoing silent retries (it's been polling every
+500ms on wall power throughout) finally succeed → panel re-paints. No
+manual steps. State carried across by `state.json`, loaded on server
+boot.
+
+**Auth and firewall posture.** Devbox → laptop traffic is
+Tailscale-only; no public exposure. LAN → laptop traffic is gated by a
+scoped Defender rule (TCP 5000, `RemoteAddress 192.168.88.0/24` only)
+plus the Hyper-V vSwitch rule for the WSL mirror. Home subnet
+only. The server itself runs no auth — internal by design.
+
+**Skills (run from any devbox Claude tab):**
+
+- `/claudergb-color <name>` → POST `/claim-color` → server bumps the
+  current holder if needed, prints the hex string for manual Windows
+  Terminal tab tint.
+- `/claudergb-clear <name>` → POST `/session {state=closed}` → server
+  deletes the record, frees the palette lease.
+- `/claudergb-status` → GET `/sessions` → ANSI table of every active
+  session.
+
+All three skills resolve their target via `$CLAUDE_LED_HOST:5000` (the
+laptop's Tailscale IP, set in the devbox's `~/.claude/settings.json`).
+
+### Two-host topology (detail)
+
 ```
    Cloud dev box (WSL)                    Home laptop (WSL)
    +───────────────────────────+          +─────────────────────────────+
