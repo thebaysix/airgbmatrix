@@ -1,0 +1,15 @@
+# Copy to CIRCUITPY/settings.toml and fill in. CircuitPython 8+ reads this
+# file at boot and exposes values via os.getenv().
+
+WIFI_SSID = "your-ssid"
+WIFI_PASSWORD = "your-password"
+
+# Dev-box LAN IP, hardcoded — mDNS resolution from CircuitPython is unreliable.
+# Pin the IP via a static DHCP reservation in your router so reboots don't
+# rotate it.
+SERVER_URL = "http://192.168.1.10:5000"
+
+# Panel brightness, integer 0-100. HUB75 panels are outdoor-readable by
+# default; 20 is comfortable indoors, 10-15 for bedrooms, 100 for outdoor
+# demos. Default if omitted: 20.
+BRIGHTNESS_PCT = 20

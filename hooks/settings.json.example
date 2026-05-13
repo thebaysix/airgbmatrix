@@ -1,0 +1,79 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh working"
+          },
+          {
+            "type": "command",
+            "command": "/absolute/path/to/claudergbmatrix/hooks/tint_terminal.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh pending"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh stopped"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh awaiting"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh tool-start"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh closed"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "_comment": "If Claude Code and server.py run on the same host, leave localhost. If the server lives on a different host (e.g. a home laptop reached over Tailscale), set this to its address (e.g. 100.x.y.z).",
+    "CLAUDE_LED_HOST": "localhost",
+    "CLAUDE_LED_PORT": "5000"
+  }
+}

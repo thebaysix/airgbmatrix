@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Runtime state — regenerates from hooks; not worth versioning
+state.json
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# CircuitPython-on-host artifacts (if you ever mount CIRCUITPY here)
+*.uf2
