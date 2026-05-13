@@ -607,7 +607,9 @@ Available:
 - **S3 Matrix Portal** ships with HUB75 driver onboard — no bonnet, no
   rpi-rgb-led-matrix install. CircuitPython firmware + `displayio`.
 - **Power**: a 32×32 panel at full white draws ~2A @ 5V. Use a separate 5V
-  supply (the kit ships a 2.1mm jack adapter and 4700µF cap for smoothing).
+  supply via a 2.1mm jack adapter. A 4700µF capacitor across the panel's
+  5V terminals is an optional but recommended add-on for inrush smoothing.
+  All parts sold separately by Adafruit; there's no kit.
 - **Pi-fallback**: if running on a Pi + Adafruit RGB Matrix Bonnet, blacklist
   `snd_bcm2835` and set `dtparam=audio=off` in `/boot/config.txt` to eliminate
   flicker (audio module conflicts with the bonnet on GPIO 18).
