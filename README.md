@@ -604,15 +604,22 @@ Available:
 
 ## Hardware notes
 
-- **S3 Matrix Portal** ships with HUB75 driver onboard — no bonnet, no
-  rpi-rgb-led-matrix install. CircuitPython firmware + `displayio`.
-- **Power**: a 32×32 panel at full white draws ~2A @ 5V. Use a separate 5V
-  supply via a 2.1mm jack adapter. A 4700µF capacitor across the panel's
-  5V terminals is an optional but recommended add-on for inrush smoothing.
-  All parts sold separately by Adafruit; there's no kit.
-- **Pi-fallback**: if running on a Pi + Adafruit RGB Matrix Bonnet, blacklist
-  `snd_bcm2835` and set `dtparam=audio=off` in `/boot/config.txt` to eliminate
-  flicker (audio module conflicts with the bonnet on GPIO 18).
+- **[S3 Matrix Portal](https://www.adafruit.com/product/5778)** ships with
+  HUB75 driver onboard — no bonnet, no rpi-rgb-led-matrix install.
+  CircuitPython firmware + `displayio`.
+- **Panel**: [32×32 RGB LED Matrix, 5mm pitch](https://www.adafruit.com/product/2026).
+  Other pitches (4mm, 6mm) work — adjust the diffuser gap accordingly.
+- **Power**: a 32×32 panel at full white draws ~2A @ 5V. Use a separate
+  [5V 4A switching supply](https://www.adafruit.com/product/1466) via a
+  [2.1mm jack to screw-terminal adapter](https://www.adafruit.com/product/368).
+  A [4700µF capacitor](https://www.adafruit.com/product/1589) across the
+  panel's 5V terminals is an optional but recommended add-on for inrush
+  smoothing. All parts sold separately by Adafruit; there's no kit.
+- **Pi-fallback**: if running on a Pi +
+  [Adafruit RGB Matrix Bonnet](https://www.adafruit.com/product/3211),
+  blacklist `snd_bcm2835` and set `dtparam=audio=off` in
+  `/boot/config.txt` to eliminate flicker (audio module conflicts with
+  the bonnet on GPIO 18).
 - **Brightness**: HUB75 panels run at outdoor-readable brightness by default.
   Set `BRIGHTNESS_PCT` (0–100 integer) in `CIRCUITPY/settings.toml`. `20` is
   comfortable indoors, `10–15` for bedrooms, `100` for outdoor demos.
