@@ -201,7 +201,6 @@ by an 8th-and-9th session arriving. Endpoints:
 - *Server-side* (`server/renderer.py`) — pure paint logic, called by:
   - `server/term_renderer.py` — dev-box ANSI 24-bit terminal preview.
   - `server/mock.py` — browser preview at `http://localhost:5001`.
-  - `legacy/pi_renderer.py` — Pi + Adafruit RGB Matrix Bonnet fallback.
 - *S3-side* (`s3/render_frame.py`) — port for CircuitPython, exercised by:
   - `s3/code.py` — real Matrix Portal S3 entry point. Polls over WiFi via
     `adafruit_requests`, paints into `displayio.Bitmap`.
@@ -566,7 +565,7 @@ Risks worth knowing before flashing:
 | `s3/features.py`              | Mirror of `server/features.py` for the S3|
 | `s3/displayio.py`             | Dev-box mock of CircuitPython displayio  |
 | `s3/settings.toml.example`    | WIFI_SSID, WIFI_PASSWORD, SERVER_URL, BRIGHTNESS_PCT |
-| `legacy/pi_renderer.py`       | Pi + bonnet fallback driver              |
+| `legacy/pi_renderer.py`       | Legacy Pi-bonnet driver (not in current setup) |
 | `hooks/notify.sh`             | Posts session state + last-16-turn usage |
 | `hooks/tint_terminal.sh`      | OSC 4 tab tint                           |
 | `hooks/settings.json.example` | Template for `~/.claude/settings.json`   |
@@ -604,9 +603,9 @@ Available:
 
 ## Hardware notes
 
-- **[S3 Matrix Portal](https://www.adafruit.com/product/5778)** ships with
-  HUB75 driver onboard — no bonnet, no rpi-rgb-led-matrix install.
-  CircuitPython firmware + `displayio`.
+- **[S3 Matrix Portal](https://www.adafruit.com/product/5778)** has the
+  HUB75 driver onboard and runs CircuitPython firmware + `displayio`.
+  S3 → 16-pin ribbon → panel; nothing else between them.
 - **Panel**: [32×32 RGB LED Matrix, 5mm pitch](https://www.adafruit.com/product/2026).
   Other pitches (4mm, 6mm) work — adjust the diffuser gap accordingly.
 - **Power**: a 32×32 panel at full white draws ~2A @ 5V. Use a separate
