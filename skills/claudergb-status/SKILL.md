@@ -45,7 +45,7 @@ Per session, compute:
 Color index → name:
 
 ```
-0 orange   1 yellow   2 cyan      3 brown
+0 orange   1 yellow   2 cyan      3 purple
 4 blue     5 green    6 magenta   7 red
 ```
 

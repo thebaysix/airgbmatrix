@@ -41,13 +41,13 @@ def _hsl(h_deg):
 
 
 PALETTE = (
-    (240, 140, 40),   # 0: orange — brighter than _hsl(30) so it doesn't blend into brown
+    (240, 140, 40),   # 0: orange
     _hsl(60),         # 1: yellow
     _hsl(180),        # 2: cyan
-    (143, 80, 36),    # 3: brown — direct RGB; not reachable at default L/S
+    (110, 40, 210),   # 3: purple — fills the blue↔magenta gap
     _hsl(240),        # 4: blue
-    (60, 230, 100),   # 5: green — brighter + cyan-tinted vs BAR_GREEN(0,200,0)
+    (40, 200, 40),    # 5: green  — minimal blue so swatch reads green
     _hsl(300),        # 6: magenta
-    (170, 40, 60),    # 7: red   — darker + pink-tinted vs BAR_RED(220,30,30)
+    (170, 40, 60),    # 7: red    — darker + pink-tinted vs BAR_RED(220,30,30)
 )
 PALETTE_SIZE = len(PALETTE)

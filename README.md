@@ -590,7 +590,7 @@ ln -snf ~/r/nonrepo/standalone/claudergbmatrix/skills/claudergb-status \
 Available:
 
 - **`/claudergb-color <color>`** — set the current session's tile + tab
-  to one of `orange yellow cyan brown blue green magenta red`. If the
+  to one of `orange yellow cyan purple blue green magenta red`. If the
   color is in use, the holder is rotated to a free idx; Claude prints a
   one-line command to paste in that bumped tab to resync its tint.
 - **`/claudergb-clear <color>`** — drop whichever session is currently

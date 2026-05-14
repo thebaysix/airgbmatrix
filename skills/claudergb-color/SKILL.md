@@ -1,6 +1,6 @@
 ---
 name: claudergb-color
-description: Manually set the LED tile color for the current Claude Code session to a specific palette color (orange, yellow, cyan, brown, blue, green, magenta, red). If the requested color is in use by another session, that session is rotated to a free color. Use when the user runs `/claudergb-color <color>` or asks to change this session's tile/tab color.
+description: Manually set the LED tile color for the current Claude Code session to a specific palette color (orange, yellow, cyan, purple, blue, green, magenta, red). If the requested color is in use by another session, that session is rotated to a free color. Use when the user runs `/claudergb-color <color>` or asks to change this session's tile/tab color.
 ---
 
 # /claudergb-color
@@ -15,7 +15,7 @@ The user invokes this with one argument:
 /claudergb-color <color>
 ```
 
-where `<color>` is one of: `orange yellow cyan brown blue green magenta red`.
+where `<color>` is one of: `orange yellow cyan purple blue green magenta red`.
 
 ## Steps
 
@@ -37,7 +37,7 @@ project's cwd).
 | orange  | 0   |
 | yellow  | 1   |
 | cyan    | 2   |
-| brown   | 3   |
+| purple   | 3   |
 | blue    | 4   |
 | green   | 5   |
 | magenta | 6   |

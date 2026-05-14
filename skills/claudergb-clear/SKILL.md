@@ -17,7 +17,7 @@ The user invokes this with one argument:
 /claudergb-clear <color>
 ```
 
-where `<color>` is one of: `orange yellow cyan brown blue green magenta red`.
+where `<color>` is one of: `orange yellow cyan purple blue green magenta red`.
 
 ## Steps
 
@@ -28,7 +28,7 @@ where `<color>` is one of: `orange yellow cyan brown blue green magenta red`.
 | orange  | 0   |
 | yellow  | 1   |
 | cyan    | 2   |
-| brown   | 3   |
+| purple   | 3   |
 | blue    | 4   |
 | green   | 5   |
 | magenta | 6   |

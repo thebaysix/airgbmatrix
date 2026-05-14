@@ -7,10 +7,11 @@ STATE_COLORS: dict[str, tuple[int, int, int]] = {
     "empty":   (0x00, 0x00, 0x00),
 }
 
-# 8-color session swatch palette in HSL with S=0.65, L=0.5. Hues are picked
-# from the non-red, non-green zones of the wheel so swatches never visually
-# collide with BAR_RED/BAR_GREEN in the histogram. Two warm (orange, yellow),
-# six cool (cyan → pink), 30° apart within each cluster.
+# 8-color session swatch palette. Most slots derive from HSL with S=0.65,
+# L=0.5; a few are direct RGB tweaks (purple, green, red) chosen for clearer
+# panel distinction. Hue collisions with the BAR_GREEN/BAR_RED histogram
+# colors are acceptable — swatch placement (left column) and code-bar
+# placement (right-side stacked) make them visually distinguishable.
 #
 # The server leases an index to each session for its lifetime so up-to-8
 # visible sessions never collide on color (vs. hash-mod-8 which would collide
@@ -21,12 +22,12 @@ def _hsl(h_deg: int) -> tuple[int, int, int]:
 
 
 PALETTE: tuple[tuple[int, int, int], ...] = (
-    (240, 140, 40),   # 0: orange     — brighter than _hsl(30) so it doesn't blend into brown
+    (240, 140, 40),   # 0: orange
     _hsl(60),         # 1: yellow
     _hsl(180),        # 2: cyan
-    (143, 80, 36),    # 3: brown      — direct RGB, not reachable at default L/S
+    (110, 40, 210),   # 3: purple     — fills the blue↔magenta gap, distinct from both via R-shift
     _hsl(240),        # 4: blue
-    (60, 230, 100),   # 5: green      — brighter + cyan-tinted vs BAR_GREEN(0,200,0)
+    (40, 200, 40),    # 5: green      — minimal blue so swatch reads green, not cyan-adjacent
     _hsl(300),        # 6: magenta
     (170, 40, 60),    # 7: red        — darker + pink-tinted vs BAR_RED(220,30,30)
 )
