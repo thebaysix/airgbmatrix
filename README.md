@@ -615,11 +615,6 @@ Available:
   A [4700µF capacitor](https://www.adafruit.com/product/1589) across the
   panel's 5V terminals is an optional but recommended add-on for inrush
   smoothing. All parts sold separately by Adafruit; there's no kit.
-- **Pi-fallback**: if running on a Pi +
-  [Adafruit RGB Matrix Bonnet](https://www.adafruit.com/product/3211),
-  blacklist `snd_bcm2835` and set `dtparam=audio=off` in
-  `/boot/config.txt` to eliminate flicker (audio module conflicts with
-  the bonnet on GPIO 18).
 - **Brightness**: HUB75 panels run at outdoor-readable brightness by default.
   Set `BRIGHTNESS_PCT` (0–100 integer) in `CIRCUITPY/settings.toml`. `20` is
   comfortable indoors, `10–15` for bedrooms, `100` for outdoor demos.
