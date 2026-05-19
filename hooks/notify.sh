@@ -103,21 +103,55 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
   # lines for the same group, so the server's upsert keeps refreshing sums.
   TURNS_JSON=$(jq -s -c '
     def lines: if . == null or . == "" then 0 else (split("\n") | length) end;
+    # Per-Edit accounting:
+    #   - If old_string is empty OR is a substring of new_string (anchor /
+    #     wrap pattern), treat as pure add: added=lines(new), removed=0.
+    #     This avoids counting anchor lines as "removed" — the common case
+    #     where an Edit replaces a context anchor with anchor+new content.
+    #   - Otherwise, net delta: added=max(0, lines(new)-lines(old)),
+    #     removed=max(0, lines(old)-lines(new)).
+    # _any bools survive same-size refactors (rename old=5 → new=5 with no
+    # substring overlap → added=removed=0, but added_any=removed_any=true
+    # so the renderer floors paint 1 px of each).
+    def pair_delta($old; $new):
+      ($old // "") as $o |
+      ($new // "") as $n |
+      ($o | lines) as $ol |
+      ($n | lines) as $nl |
+      (if ($o == "") or ($n | contains($o)) then
+         {a: $nl, r: 0}
+       else
+         {a: (if $nl > $ol then $nl - $ol else 0 end),
+          r: (if $ol > $nl then $ol - $nl else 0 end)}
+       end) as $d |
+      {added: $d.a, removed: $d.r,
+       added_any: ($nl > 0),
+       removed_any: ($ol > 0 and (($n | contains($o)) | not))};
     def edit_delta:
       if .name == "Edit" then
-        {added: (.input.new_string | lines), removed: (.input.old_string | lines)}
+        pair_delta(.input.old_string; .input.new_string)
       elif .name == "MultiEdit" then
-        ((.input.edits // []) | reduce .[] as $e ({added:0, removed:0};
-          {added: (.added + ($e.new_string | lines)),
-           removed: (.removed + ($e.old_string | lines))}))
+        ((.input.edits // []) | reduce .[] as $e
+          ({added:0, removed:0, added_any:false, removed_any:false};
+           pair_delta($e.old_string; $e.new_string) as $d |
+           {added: (.added + $d.added),
+            removed: (.removed + $d.removed),
+            added_any: (.added_any or $d.added_any),
+            removed_any: (.removed_any or $d.removed_any)}))
       elif .name == "Write" then
-        {added: (.input.content | lines), removed: 0}
-      else {added:0, removed:0} end;
+        ((.input.content // "") | lines) as $cl |
+        {added: $cl, removed: 0,
+         added_any: ($cl > 0), removed_any: false}
+      else {added:0, removed:0, added_any:false, removed_any:false} end;
     def code_delta:
       ((.message.content // [])
         | map(select(.type == "tool_use") | edit_delta)
-        | reduce .[] as $d ({added:0, removed:0};
-            {added: (.added + $d.added), removed: (.removed + $d.removed)}));
+        | reduce .[] as $d
+            ({added:0, removed:0, added_any:false, removed_any:false};
+             {added: (.added + $d.added),
+              removed: (.removed + $d.removed),
+              added_any: (.added_any or $d.added_any),
+              removed_any: (.removed_any or $d.removed_any)}));
     def msg_tokens:
       ((.message.usage.input_tokens // 0)
        + (.message.usage.output_tokens // 0)
@@ -139,6 +173,7 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
             kind: "turn",
             ts: $x.timestamp,
             tokens: 0, added: 0, removed: 0,
+            added_any: false, removed_any: false,
             last_id: null,
             seen: {}
           }
@@ -163,8 +198,11 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
         | (if (.cur.seen[$mid] // false) then .
            else .cur.seen[$mid] = true
                 | .cur.tokens += ($x | msg_tokens) end)
-        | .cur.added += ($x | code_delta.added)
-        | .cur.removed += ($x | code_delta.removed)
+        | ($x | code_delta) as $cd
+        | .cur.added += $cd.added
+        | .cur.removed += $cd.removed
+        | .cur.added_any = (.cur.added_any or $cd.added_any)
+        | .cur.removed_any = (.cur.removed_any or $cd.removed_any)
         | .cur.last_id = $mid
         | .cur.ts = $x.timestamp
       else . end)
@@ -177,7 +215,9 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
         tokens: .tokens,
         ts: .ts,
         added: .added,
-        removed: .removed
+        removed: .removed,
+        added_any: .added_any,
+        removed_any: .removed_any
       })
   ' "$TRANSCRIPT" 2>/dev/null) || TURNS_JSON="[]"
 

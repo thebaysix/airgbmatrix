@@ -193,6 +193,12 @@ def upsert_session():
                     "ts_epoch": max(old_ts_epoch, new_ts_epoch),
                     "added": max(prev_turn.get("added") or 0, _nonneg_int(t.get("added"))),
                     "removed": max(prev_turn.get("removed") or 0, _nonneg_int(t.get("removed"))),
+                    # _any flags survive once set — if any assistant call in a
+                    # user-turn added/removed lines (even net-zero refactors),
+                    # the flag stays true so the renderer floors are visible
+                    # across re-POSTs.
+                    "added_any": bool(prev_turn.get("added_any")) or bool(t.get("added_any")),
+                    "removed_any": bool(prev_turn.get("removed_any")) or bool(t.get("removed_any")),
                 }
             turns = sorted(by_id.values(), key=lambda x: x.get("ts") or "")[-MAX_TURNS:]
         elif isinstance(legacy_tokens, int) and legacy_tokens > 0:

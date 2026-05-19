@@ -225,13 +225,33 @@ Per-turn token count = `input_tokens + output_tokens + cache_creation_input_toke
 into uniformly tall bars. What we actually want to surface is the *new* work
 each turn produced.
 
-Per-turn code change = sum of `added` / `removed` line counts across all
-Edit/Write/MultiEdit `tool_use` blocks in that msg_id. Edit semantics are
-git-diff-shaped: replacing N lines with M counts as `M added + N removed`
-(so a 5-for-5 in-place edit reads as 5/5, not 0/0). MultiEdit sums across its
-`edits[]`. Write counts new content as added; we don't see prior file content
-from the tool_use, so removed stays 0 (a pre-edit hook could refine this
-later if needed).
+Per-turn code change = sum of `added` / `removed` across all
+Edit/Write/MultiEdit `tool_use` blocks in that user-turn, computed with
+**net-delta + substring-aware wrap detection**:
+
+- For each Edit (or MultiEdit sub-edit), if `old_string` is empty OR is a
+  contiguous substring of `new_string`, treat it as a **wrap** (anchor /
+  insert pattern, where `old_string` is just the unique-match anchor and
+  no actual lines are being removed). Count: `added = lines(new)`,
+  `removed = 0`.
+- Otherwise, count **net delta**: `added = max(0, lines(new) - lines(old))`,
+  `removed = max(0, lines(old) - lines(new))`.
+- Write counts content lines as added; we don't see prior file content
+  from the tool_use, so removed stays 0.
+
+This avoids the historical bug where Edit's `old_string` (which always
+includes anchor/context lines for unique-match purposes) was counted as
+"removed" — anchor-add patterns (`old="def foo():"`, `new="def foo():\n
+return bar"`) used to produce a red bar despite no actual line removal.
+
+Two boolean shadow fields, `added_any` and `removed_any`, are also
+shipped per turn. They are true if the turn touched *any* lines on each
+side, regardless of net delta. The renderer uses them as visibility
+floors: when net added/removed is 0 but the bool is true (e.g. a 5→5
+in-place refactor with no substring overlap), the bar still gets a 1-px
+green/red floor so the activity stays visible. Anchored adds keep
+`removed_any=false` (the substring check), so they don't trigger a red
+floor.
 
 
 ## Hooks

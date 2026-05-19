@@ -100,12 +100,20 @@ def _half_bar_height(value, max_value):
     return h if h >= 1 else 1
 
 
-def _paint_code_bar(canvas, abs_x, y0, added, removed, max_added, max_removed, dim):
+def _paint_code_bar(canvas, abs_x, y0, added, removed, added_any, removed_any,
+                    max_added, max_removed, dim):
     # Both stack from the bottom: green block first, then red block on top of
     # green. Each capped at HALF_TILE so the combined max (4+4) just fills the
     # column. Single-color turns sit at the floor.
+    # _any floors: when net added/removed is 0 but the turn DID touch added
+    # or removed lines (e.g. a same-size in-place refactor), paint 1px so
+    # the activity isn't invisible.
     h_green = _half_bar_height(added, max_added)
+    if h_green == 0 and added_any:
+        h_green = 1
     h_red = _half_bar_height(removed, max_removed)
+    if h_red == 0 and removed_any:
+        h_red = 1
     if h_green > 0:
         color = BAR_GREEN_DIM if dim else BAR_GREEN
         for dy in range(TILE_H - h_green, TILE_H):
@@ -169,9 +177,12 @@ def render_frame(canvas, sessions, now_epoch):
             col += 1
             added = turn.get("added", 0) or 0
             removed = turn.get("removed", 0) or 0
-            if (added > 0 or removed > 0) and col < HIST_W:
+            added_any = bool(turn.get("added_any"))
+            removed_any = bool(turn.get("removed_any"))
+            if (added > 0 or removed > 0 or added_any or removed_any) and col < HIST_W:
                 _paint_code_bar(canvas, x0 + COLOR_W + col, y0,
-                                added, removed, max_added, max_removed, dim)
+                                added, removed, added_any, removed_any,
+                                max_added, max_removed, dim)
                 col += 1
 
         if pending:
