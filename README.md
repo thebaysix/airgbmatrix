@@ -654,6 +654,26 @@ $10 on real acrylic.
 
 ## Known limitations
 
+- **"Dim after 24h" never fires on the S3.** Shelved. The S3 has no NTP
+  sync, so `time.time()` returns boot-seconds (or 0), not Unix epoch.
+  `age = now_epoch - ts_epoch` becomes a huge negative number, the
+  `age > DIM_AFTER_S` branch in `s3/render_frame.py` is never taken,
+  and every turn paints bright forever. Dev-box renderers do dim
+  correctly (they use real `time.time()`). Fix options when we
+  revisit:
+  - **A.** Add `adafruit_ntp` to `code.py`, sync RTC after WiFi
+    connect. Minimal change; one extra lib + one failure mode (NTP
+    unreachable → silently lose feature for that boot).
+  - **B.** Server includes `now_epoch` in the `/sessions` response;
+    S3 uses that instead of `time.time()`. Cleanest split (S3 stays a
+    dumb consumer); requires updating both renderers.
+  - **C.** Server pre-computes per-turn `is_old: bool` and ships it.
+    Simplest S3 change but moves the 24h threshold from render-side to
+    server-side config.
+  - Likely choice: B. Also verify `BAR_DIM (60,60,60)` is still
+    visible at `BRIGHTNESS_PCT=20` (scaled → `(12,12,12)` which may
+    quantize to off at `bit_depth=4`). If invisible, bump DIM RGBs
+    higher (~`(100,100,100)`) before relying on the feature.
 - **Tab tint depends on the server being live at SessionStart.** The
   `tint_terminal.sh` hook queries `GET /sessions` to learn the session's
   leased `color_idx`; if the server isn't running when a Claude session
