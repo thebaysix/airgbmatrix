@@ -672,6 +672,48 @@ with parchment paper first — if you like the diffused look, spend the
 $10 on real acrylic.
 
 
+## Troubleshooting
+
+### Panel suddenly black after running fine for weeks
+
+Most likely the laptop WSL VM died (Windows reboot, Task Scheduler trigger
+missed, `sleep infinity` killed). The S3's WiFi may also have dropped if
+its association was lost while the server was unreachable. Recovery
+sequence:
+
+**Laptop PowerShell:**
+```powershell
+wsl --list --running                   # likely empty
+Start-ScheduledTask -TaskName "StartWSL"
+Start-Sleep 8
+wsl --list --running                   # should now list Ubuntu
+curl.exe http://localhost:5000/sessions  # should return JSON
+```
+
+If `curl` fails after WSL is back, the systemd service didn't auto-start.
+From WSL: `systemctl --user status claudergbmatrix.service`. Restart it
+manually if needed: `systemctl --user restart claudergbmatrix.service`.
+
+**S3 side** — easiest path is a power cycle (flip the strip off and on):
+the S3 cold-boots, reads `settings.toml`, reconnects WiFi, resumes polling.
+If you'd rather not power-cycle (or want to confirm the failure mode),
+connect via PuTTY on `COM5` at 115200, drop into REPL, and reconnect:
+
+```python
+import os, wifi
+wifi.radio.connect(os.getenv("WIFI_SSID"), os.getenv("WIFI_PASSWORD"))
+print(wifi.radio.connected, wifi.radio.ipv4_address)
+```
+
+`True 192.168.88.21` confirms re-association. Ctrl+D to soft-reboot
+code.py so it picks up where it left off.
+
+If this recurs repeatedly: investigate Task Scheduler config. Candidate
+hardening — add an `AtStartup` trigger alongside the `AtLogOn` trigger so
+WSL boots even before user login; or set `RunOnlyIfLoggedOn=False` on
+the task.
+
+
 ## Known limitations
 
 - **"Dim after 24h" never fires on the S3.** Shelved. The S3 has no NTP
