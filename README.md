@@ -404,21 +404,40 @@ sudo loginctl enable-linger $USER
 View logs: `journalctl --user -u claudergbmatrix.service -f`.
 
 **3. Auto-boot WSL on Windows login** so the systemd unit actually has
-a kernel to run in. Admin PowerShell on the laptop:
+a kernel to run in. Two-part: a VBS wrapper that launches `wsl.exe`
+without a console window, plus a Task Scheduler entry that fires the
+wrapper at logon.
+
+Create `C:\Users\<you>\hidden-wsl.vbs`:
+
+```vbs
+CreateObject("Wscript.Shell").Run "wsl.exe --exec sleep infinity", 0, False
+```
+
+Admin PowerShell on the laptop:
 
 ```powershell
 Register-ScheduledTask -TaskName "StartWSL" `
   -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME) `
-  -Action (New-ScheduledTaskAction -Execute "wsl.exe" -Argument "--exec sleep infinity") `
+  -Action (New-ScheduledTaskAction -Execute "wscript.exe" -Argument "$env:USERPROFILE\hidden-wsl.vbs") `
   -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable) `
   -RunLevel Limited
 ```
 
-**Note: the `sleep infinity` argument is load-bearing.** A shorter action
-like `wsl.exe --exec true` boots WSL but exits immediately; WSL then
-idle-times-out and tears down the VM ~10s later, taking your service
-with it. `sleep infinity` is a no-CPU process that holds the VM open
-indefinitely. Don't simplify it.
+**Note: the `sleep infinity` argument is load-bearing.** A shorter
+command like `wsl.exe --exec true` boots WSL but exits immediately;
+WSL then idle-times-out and tears down the VM ~10s later, taking your
+service with it. `sleep infinity` is a no-CPU process that holds the
+VM open indefinitely. Don't simplify it.
+
+**Why the VBS wrapper:** `wsl.exe` is a console application — Task
+Scheduler launching it directly opens a visible terminal window for
+the lifetime of `sleep infinity`. Closing that window kills the
+process and the chain collapses. `wscript.exe` running the VBS spawns
+`wsl.exe` with WindowStyle=Hidden, so the VM stays alive in the
+background with nothing visible to accidentally close. To verify it's
+running: `wsl --list --running` (Windows-side) or check for the
+`wsl.exe` process in Task Manager.
 
 With all three in place, a laptop power-cycle ends with `/sessions`
 serving JSON on its own, no terminals opened, no commands typed.
