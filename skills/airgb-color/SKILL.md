@@ -1,9 +1,9 @@
 ---
-name: claudergb-color
-description: Manually set the LED tile color for the current Claude Code session to a specific palette color (orange, yellow, cyan, purple, blue, green, magenta, red). If the requested color is in use by another session, that session is rotated to a free color. Use when the user runs `/claudergb-color <color>` or asks to change this session's tile/tab color.
+name: airgb-color
+description: Manually set the LED tile color for the current Claude Code session to a specific palette color (orange, yellow, cyan, purple, blue, green, magenta, red). If the requested color is in use by another session, that session is rotated to a free color. Use when the user runs `/airgb-color <color>` or asks to change this session's tile/tab color.
 ---
 
-# /claudergb-color
+# /airgb-color
 
 Sets this session's color in the claudergbmatrix board AND the Windows
 Terminal tab. If the color is already in use, the holding session rotates
@@ -12,7 +12,7 @@ to a free color and the user is told how to retint that other tab.
 The user invokes this with one argument:
 
 ```
-/claudergb-color <color>
+/airgb-color <color>
 ```
 
 where `<color>` is one of: `orange yellow cyan purple blue green magenta red`.
@@ -72,7 +72,7 @@ Failure cases:
   host is up and the server process is running."*
 - HTTP 404 → session not yet registered. Tell the user:
   *"This session isn't tracked yet — submit any prompt to fire a hook,
-  then re-run `/claudergb-color`."*
+  then re-run `/airgb-color`."*
 - HTTP 400 → unreachable if the skill maps the color correctly.
 
 ### 4. Report the result

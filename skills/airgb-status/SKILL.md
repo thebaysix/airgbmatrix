@@ -1,9 +1,9 @@
 ---
-name: claudergb-status
-description: Show the current state of the claudergbmatrix board — every active session with its color, state, turn count, token totals, code-change totals, and idle time. Use when the user runs `/claudergb-status` or asks "what's on the board" / "show me the matrix" / "list my sessions".
+name: airgb-status
+description: Show the current state of the claudergbmatrix board — every active session with its color, state, turn count, token totals, code-change totals, and idle time. Use when the user runs `/airgb-status` or asks "what's on the board" / "show me the matrix" / "list my sessions".
 ---
 
-# /claudergb-status
+# /airgb-status
 
 Read-only snapshot of the LED board.
 
@@ -37,10 +37,28 @@ Per session, compute:
 | id      | first 8 chars of `id` (full UUID is too noisy)                   |
 | color   | name from `color_idx` (table below)                              |
 | state   | `state` (working / stopped) — `pending=true` adds a `*` marker   |
-| turns   | `len(turns)`                                                     |
-| tokens  | `sum(t.tokens)` — abbreviate as `12k` / `1.2M` for legibility    |
+| turns   | `len(turns)`, but render `≥16` when it equals 16 (see note)      |
+| context | latest turn's `tokens` — abbreviate as `12k` / `1.2M`           |
 | +/-     | `sum(t.added)` / `sum(t.removed)` — show `0` for plain `0/0`     |
 | age     | now − `updated_at`, abbreviated as `42s` / `5m` / `2h` / `1d`    |
+
+**Important — what the numbers actually mean (don't sum tokens):**
+
+- **`context` is current window size, not work volume.** Each turn's
+  `tokens` field is the *context-window size at that turn* (max-merged across
+  transcript-flush re-POSTs server-side), NOT incremental tokens spent.
+  Summing them double-counts wildly and is meaningless. Report the **latest**
+  turn's `tokens` — i.e. the turn with the greatest `ts_epoch` and a positive
+  `tokens` value (skip `compact`/`clear` markers, which carry `0`). That's
+  "how big is this session's context right now." It can drop sharply after a
+  compaction — that's expected, not a bug.
+- **`turns` is capped, not a lifetime count.** The server keeps only the last
+  **16** turns per session (`MAX_TURNS`), so `len(turns)` means "≥16" once it
+  hits the cap. Render it as `≥16` (not a bare `16`) in that case so it isn't
+  read as an exact total.
+- **`+/-` is over the last 16 turns only**, for the same capping reason. It's
+  recent code-change activity, not the session's lifetime diff. Note this in a
+  one-line footer under the table so it isn't mistaken for a full total.
 
 Color index → name:
 
@@ -60,15 +78,18 @@ and parse the hex.
 A reasonable layout:
 
 ```
-slot  id        color           state    turns  tokens   code        age
+slot  id        color           state    turns  context  code        age
 ----  --------  --------------  -------  -----  -------  ----------  -----
-  0   ed37888a  ████ red        working*    16     857k  +334/-245   42s
+  0   ed37888a  ████ red        working*   ≥16     857k  +334/-245   42s
   1   d4614dd8  ████ blue       stopped     12     185k  +90/-59     5m
   ...
+
+context = current window size · turns ≥16 = capped · +/- = last 16 turns
 ```
 
 (The `████` block uses the actual ANSI background-color escape so the
-swatch renders inline.)
+swatch renders inline. The footer line keeps the capped/snapshot caveats
+visible so the numbers aren't read as lifetime totals.)
 
 ### 3. Keep it tight
 

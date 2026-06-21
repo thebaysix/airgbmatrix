@@ -1,9 +1,9 @@
 ---
-name: claudergb-clear
-description: Remove the session currently using a given palette color from the claudergbmatrix board. The session record is deleted server-side (frees the palette lease, clears the LED tile) — same effect as the session firing SessionEnd. Use when the user runs `/claudergb-clear <color>` or asks to "drop the red session" / "remove the magenta tile" etc.
+name: airgb-clear
+description: Remove the session currently using a given palette color from the claudergbmatrix board. The session record is deleted server-side (frees the palette lease, clears the LED tile) — same effect as the session firing SessionEnd. Use when the user runs `/airgb-clear <color>` or asks to "drop the red session" / "remove the magenta tile" etc.
 ---
 
-# /claudergb-clear
+# /airgb-clear
 
 Drop whichever session is currently holding a given color. The session
 record is deleted (palette lease freed, tile clears). Other tabs keep
@@ -14,7 +14,7 @@ notices the change at the next hook fire.
 The user invokes this with one argument:
 
 ```
-/claudergb-clear <color>
+/airgb-clear <color>
 ```
 
 where `<color>` is one of: `orange yellow cyan purple blue green magenta red`.
@@ -79,7 +79,7 @@ Expect `{"ok":true}` with HTTP 200.
 If the session that got cleared is the user's *current* tab (its UUID
 matches the session you're currently running in), append a note:
 
-> *Heads up: that was this session. Run `/claudergb-color <newcolor>`
+> *Heads up: that was this session. Run `/airgb-color <newcolor>`
 > to claim a new color, or any prompt will re-register on the next
 > SessionStart-like hook fire.*
 
