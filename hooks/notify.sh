@@ -58,8 +58,8 @@ case "$ARG" in
   *) echo "invalid arg: $ARG" >&2; exit 1 ;;
 esac
 
-SID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
-TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null || true)
+SID=$(printf '%s' "$INPUT" | jq -r '.session_id // .sessionId // empty' 2>/dev/null || true)
+TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.transcript_path // .transcriptPath // empty' 2>/dev/null || true)
 # SessionStart hook input includes a `source` field: startup | resume |
 # compact | clear. Used below to emit /compact and /clear histogram markers
 # (works for both manual /compact and auto-compaction triggered when
@@ -86,6 +86,45 @@ fi
 
 TURNS_JSON="[]"
 if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+ if head -1 "$TRANSCRIPT" 2>/dev/null | jq -e 'has("parentId")' >/dev/null 2>&1; then
+  # --- GitHub Copilot transcript (events.jsonl): {type,data,id,timestamp,parentId}.
+  #     Per-turn tokens are NOT persisted (assistant.usage events are ephemeral) -> tokens=0;
+  #     code deltas come from each tool.execution_complete.result.detailedContent unified diff.
+  #     One turn record per user.message; last 16 turns. ---
+  TURNS_JSON=$(jq -s -c '
+    def difflines:
+      if . == null or . == "" then {a:0,r:0}
+      else (split("\n")) as $L
+        | {a: ([$L[]|select(startswith("+") and (startswith("+++")|not))]|length),
+           r: ([$L[]|select(startswith("-") and (startswith("---")|not))]|length)} end;
+    # tokens proxy: per-turn context size is unavailable on disk for Copilot, but
+    # the server drops kind:"turn" records with tokens<=0. Use cumulative transcript
+    # bytes/4 as a positive, monotonic, context-size-like estimate so turns persist.
+    reduce .[] as $e ({groups:[], cur:null, chars:0};
+      ($e.type) as $t
+      | (.chars += ($e | tojson | length))
+      | if $t == "user.message" then
+          (if .cur != null then .groups += [.cur] else . end)
+          | .cur = {msg_id:($e.id // ($e.timestamp+"_u")), kind:"turn", ts:$e.timestamp,
+                    tokens:((.chars/4)|floor), added:0, removed:0, added_any:false, removed_any:false}
+        elif $t == "tool.execution_complete" then
+          (if .cur == null then
+             .cur = {msg_id:("orphan_"+($e.timestamp//"0")), kind:"turn", ts:$e.timestamp,
+                     tokens:0, added:0, removed:0, added_any:false, removed_any:false} else . end)
+          | (($e.data.result.detailedContent) | difflines) as $d
+          | .cur.added += $d.a | .cur.removed += $d.r
+          | .cur.added_any = (.cur.added_any or ($d.a > 0))
+          | .cur.removed_any = (.cur.removed_any or ($d.r > 0))
+          | .cur.tokens = ((.chars/4)|floor)
+          | .cur.ts = $e.timestamp
+        elif ($t == "assistant.turn_end" or $t == "assistant.message") then
+          (if .cur != null then (.cur.tokens = ((.chars/4)|floor) | .cur.ts = $e.timestamp) else . end)
+        else . end)
+    | (if .cur != null then .groups + [.cur] else .groups end)
+    | .[(-16):]
+    | map({msg_id,kind,tokens,ts,added,removed,added_any,removed_any})
+  ' "$TRANSCRIPT" 2>/dev/null) || TURNS_JSON="[]"
+ else
   # One turn record per *user-prompt* (not per assistant API call). Walk the
   # transcript forward, group assistant messages by the preceding real user
   # message — "real" meaning user.content is a string, OR an array with no
@@ -233,6 +272,7 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
       printf 'TURNS_JSON empty after jq — turn record will not be added.\n'
     } >> "$LOG" 2>/dev/null || true
   fi
+ fi
 fi
 
 # SessionStart hook with source in {compact, clear} → emit a full-column
