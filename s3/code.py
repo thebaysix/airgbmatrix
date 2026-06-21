@@ -40,6 +40,12 @@ def main():
     group.append(displayio.TileGrid(canvas.bitmap, pixel_shader=canvas.palette))
     display.root_group = group
 
+    # Paint the empty grid before any blocking network call (wifi connect and
+    # the first HTTP connect can each stall for seconds). Proves the panel is
+    # alive at boot instead of showing black while we wait on the server.
+    render_frame(canvas, [], 0)
+    display.refresh()
+
     wifi.radio.connect(os.getenv("WIFI_SSID"), os.getenv("WIFI_PASSWORD"))
     pool = socketpool.SocketPool(wifi.radio)
     requests = adafruit_requests.Session(pool, ssl.create_default_context())
