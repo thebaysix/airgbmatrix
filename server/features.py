@@ -1,4 +1,4 @@
-"""Feature flags for in-development claudergbmatrix features.
+"""Feature flags for in-development airgbmatrix features.
 
 Toggle a flag to True/False to turn the feature on/off. All gated code paths
 read the flag at the relevant decision point — flipping a flag should change

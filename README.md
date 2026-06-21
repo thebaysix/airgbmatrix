@@ -1,4 +1,4 @@
-# claudergbmatrix
+# airgbmatrix
 
 An ambient 32×32 RGB LED panel that shows what your Claude Code sessions are
 doing — one tile per session, colored by session GUID, with a live token +
@@ -112,7 +112,7 @@ Two hosts plus one MCU plus one panel, joined by three network hops.
 
 **Persistence and recovery.** Laptop reboot → Windows Task Scheduler
 fires `wsl.exe --exec sleep infinity` at login → WSL boots → systemd
-PID 1 → `claudergbmatrix.service` starts (linger enabled) → Flask
+PID 1 → `airgbmatrix.service` starts (linger enabled) → Flask
 listens → the S3's ongoing silent retries (it's been polling every
 500ms on wall power throughout) finally succeed → panel re-paints. No
 manual steps. State carried across by `state.json`, loaded on server
@@ -126,12 +126,12 @@ only. The server itself runs no auth — internal by design.
 
 **Skills (run from any devbox Claude tab):**
 
-- `/claudergb-color <name>` → POST `/claim-color` → server bumps the
+- `/airgb-color <name>` → POST `/claim-color` → server bumps the
   current holder if needed, prints the hex string for manual Windows
   Terminal tab tint.
-- `/claudergb-clear <name>` → POST `/session {state=closed}` → server
+- `/airgb-clear <name>` → POST `/session {state=closed}` → server
   deletes the record, frees the palette lease.
-- `/claudergb-status` → GET `/sessions` → ANSI table of every active
+- `/airgb-status` → GET `/sessions` → ANSI table of every active
   session.
 
 All three skills resolve their target via `$CLAUDE_LED_HOST:5000` (the
@@ -175,10 +175,10 @@ board only ever shows currently-open sessions: a `state=closed` POST
 (SessionEnd) deletes the session record entirely, freeing its palette lease
 so the next session reusing the slot gets a fresh color. There's no
 background reaper — lifecycle is fully driven by hooks (`SessionStart`
-adds, `SessionEnd` removes) and the `/claudergb-color` / `/claudergb-clear`
+adds, `SessionEnd` removes) and the `/airgb-color` / `/airgb-clear`
 skills for manual cleanup. If a Claude session ever exits without firing
 SessionEnd (server down at the time, kernel panic, etc.) the stale record
-just sticks around until you `/claudergb-clear` it or it gets LRU-evicted
+just sticks around until you `/airgb-clear` it or it gets LRU-evicted
 by an 8th-and-9th session arriving. Endpoints:
 
 - `POST /session` — upsert a session by `id`. Optional `turns` array of
@@ -194,7 +194,7 @@ by an 8th-and-9th session arriving. Endpoints:
   `{"session_id": str, "color_idx": 0..7}`. If another session is currently
   holding that index, it gets rotated to the lowest free one. Response:
   `{"ok": true, "assigned": int, "bumped": null|{"session_id":..., "color_idx":...}}`.
-  Used by the `/claudergb-color` skill.
+  Used by the `/airgb-color` skill.
 
 **Renderers** — two stacks, one shared `render_frame`:
 
@@ -325,7 +325,7 @@ Copy just `server/` to the laptop (e.g. via `tailscale file cp`):
 
 ```bash
 # On laptop WSL
-cd ~/claudergbmatrix
+cd ~/airgbmatrix
 python3 -m venv .venv
 .venv/bin/pip install -r server/requirements.txt
 ```
@@ -374,17 +374,17 @@ systemd=true
 `wsl --shutdown` from Windows to apply. Verify after relaunch:
 `systemctl --user status` should print a running state table.
 
-**2. systemd user unit** at `~/.config/systemd/user/claudergbmatrix.service`:
+**2. systemd user unit** at `~/.config/systemd/user/airgbmatrix.service`:
 
 ```ini
 [Unit]
-Description=claudergbmatrix state server
+Description=airgbmatrix state server
 After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/claudergbmatrix
-ExecStart=%h/claudergbmatrix/server/.venv/bin/python server/server.py
+WorkingDirectory=%h/airgbmatrix
+ExecStart=%h/airgbmatrix/server/.venv/bin/python server/server.py
 Restart=on-failure
 RestartSec=5
 
@@ -397,11 +397,11 @@ login shell:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now claudergbmatrix.service
+systemctl --user enable --now airgbmatrix.service
 sudo loginctl enable-linger $USER
 ```
 
-View logs: `journalctl --user -u claudergbmatrix.service -f`.
+View logs: `journalctl --user -u airgbmatrix.service -f`.
 
 **3. Auto-boot WSL on Windows login** so the systemd unit actually has
 a kernel to run in. Two-part: a VBS wrapper that launches `wsl.exe`
@@ -449,7 +449,7 @@ available:
 
 ```bash
 tmux new -s ledboard
-cd ~/claudergbmatrix && source server/.venv/bin/activate && python server/server.py
+cd ~/airgbmatrix && source server/.venv/bin/activate && python server/server.py
 # Ctrl+B then D to detach. Re-attach later with:
 tmux attach -t ledboard
 ```
@@ -495,7 +495,7 @@ Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -D
 # External LAN → Windows :5000 (the actually-traversed Defender path).
 # Scoped to the home subnet so it's effectively home-only even when the
 # WiFi profile is Public — avoids exposure on public WiFi networks.
-New-NetFirewallRule -DisplayName "claudergbmatrix" -Direction Inbound `
+New-NetFirewallRule -DisplayName "airgbmatrix" -Direction Inbound `
   -Protocol TCP -LocalPort 5000 -Action Allow -Profile Public `
   -RemoteAddress 192.168.<your-subnet>.0/24
 ```
@@ -504,7 +504,7 @@ Both rules are needed: the Hyper-V one covers VM-side ingress, the
 Defender one covers the LAN-side ingress. If your home WiFi is profile
 Private (rare on a fresh Windows install), swap `-Profile Public` for
 `-Profile Private`. Remove cleanly with
-`Remove-NetFirewallRule -DisplayName claudergbmatrix`.
+`Remove-NetFirewallRule -DisplayName airgbmatrix`.
 
 After WSL restarts, the home LAN can reach the WSL Flask server at
 `http://<laptop-lan-ip>:5000`. Verify from your phone or another LAN device:
@@ -618,24 +618,24 @@ User-invokable skills live under `skills/<name>/SKILL.md`. Install one by
 symlinking it into `~/.claude/skills/`:
 
 ```bash
-ln -snf ~/r/nonrepo/standalone/claudergbmatrix/skills/claudergb-color \
-        ~/.claude/skills/claudergb-color
-ln -snf ~/r/nonrepo/standalone/claudergbmatrix/skills/claudergb-clear \
-        ~/.claude/skills/claudergb-clear
-ln -snf ~/r/nonrepo/standalone/claudergbmatrix/skills/claudergb-status \
-        ~/.claude/skills/claudergb-status
+ln -snf ~/r/nonrepo/standalone/airgbmatrix/skills/airgb-color \
+        ~/.claude/skills/airgb-color
+ln -snf ~/r/nonrepo/standalone/airgbmatrix/skills/airgb-clear \
+        ~/.claude/skills/airgb-clear
+ln -snf ~/r/nonrepo/standalone/airgbmatrix/skills/airgb-status \
+        ~/.claude/skills/airgb-status
 ```
 
 Available:
 
-- **`/claudergb-color <color>`** — set the current session's tile + tab
+- **`/airgb-color <color>`** — set the current session's tile + tab
   to one of `orange yellow cyan purple blue green magenta red`. If the
   color is in use, the holder is rotated to a free idx; Claude prints a
   one-line command to paste in that bumped tab to resync its tint.
-- **`/claudergb-clear <color>`** — drop whichever session is currently
+- **`/airgb-clear <color>`** — drop whichever session is currently
   using that color from the board. Same effect as that session firing
   SessionEnd. Frees the palette lease.
-- **`/claudergb-status`** — compact at-a-glance table of every active
+- **`/airgb-status`** — compact at-a-glance table of every active
   session: slot, short id, ANSI swatch + color name, state, turn count,
   abbreviated tokens, code +/- totals, and idle age. Read-only.
 
@@ -710,8 +710,8 @@ curl.exe http://localhost:5000/sessions  # should return JSON
 ```
 
 If `curl` fails after WSL is back, the systemd service didn't auto-start.
-From WSL: `systemctl --user status claudergbmatrix.service`. Restart it
-manually if needed: `systemctl --user restart claudergbmatrix.service`.
+From WSL: `systemctl --user status airgbmatrix.service`. Restart it
+manually if needed: `systemctl --user restart airgbmatrix.service`.
 
 **S3 side** — easiest path is a power cycle (flip the strip off and on):
 the S3 cold-boots, reads `settings.toml`, reconnects WiFi, resumes polling.

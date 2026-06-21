@@ -5,7 +5,7 @@ description: Manually set the LED tile color for the current Claude Code session
 
 # /airgb-color
 
-Sets this session's color in the claudergbmatrix board AND the Windows
+Sets this session's color in the airgbmatrix board AND the Windows
 Terminal tab. If the color is already in use, the holding session rotates
 to a free color and the user is told how to retint that other tab.
 
@@ -83,7 +83,7 @@ Windows Terminal's built-in **Right-click → Change tab color → More…**
 dialog. Get the hex via:
 
 ```bash
-python3 ~/r/nonrepo/standalone/claudergbmatrix/server/colors.py palette <IDX>
+python3 ~/r/nonrepo/standalone/airgbmatrix/server/colors.py palette <IDX>
 ```
 
 (prints six hex digits like `2d2dd2`, no `#`).

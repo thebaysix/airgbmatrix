@@ -225,7 +225,7 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
   # Should be rare. Captures context so future misses (like the missing-bar
   # bug) are diagnosable instead of silent. Disable by unsetting the env var.
   if [ "$TURNS_JSON" = "[]" ]; then
-    LOG="${CLAUDERGBMATRIX_LOG:-/tmp/claudergbmatrix-notify.log}"
+    LOG="${AIRGBMATRIX_LOG:-/tmp/airgbmatrix-notify.log}"
     {
       printf '\n=== %s SID=%s STATE=%s ===\n' "$(date -Iseconds)" "$SID" "$STATE"
       printf 'transcript=%s lines=%s\n' \

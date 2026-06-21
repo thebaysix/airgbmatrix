@@ -1,6 +1,6 @@
 ---
 name: airgb-status
-description: Show the current state of the claudergbmatrix board — every active session with its color, state, turn count, token totals, code-change totals, and idle time. Use when the user runs `/airgb-status` or asks "what's on the board" / "show me the matrix" / "list my sessions".
+description: Show the current state of the airgbmatrix board — every active session with its color, state, turn count, token totals, code-change totals, and idle time. Use when the user runs `/airgb-status` or asks "what's on the board" / "show me the matrix" / "list my sessions".
 ---
 
 # /airgb-status
@@ -72,7 +72,7 @@ match the table to the LED tiles at a glance. The palette RGB values are
 in `server/colors.py::PALETTE` — for an inline render, use the printf
 escape `\x1b[48;2;R;G;Bm  \x1b[0m` for a 2-char block per color. To
 fetch the actual RGB without re-implementing it, run
-`python ~/r/nonrepo/standalone/claudergbmatrix/server/colors.py palette <idx>`
+`python ~/r/nonrepo/standalone/airgbmatrix/server/colors.py palette <idx>`
 and parse the hex.
 
 A reasonable layout:

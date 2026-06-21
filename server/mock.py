@@ -55,7 +55,7 @@ app = Flask(__name__)
 
 PAGE = """
 <!doctype html>
-<html><head><title>claudergbmatrix mock</title>
+<html><head><title>airgbmatrix mock</title>
 <style>
   body { background:#111; color:#ccc; font-family:ui-monospace,monospace; margin:0; padding:24px; }
   h1 { font-size:13px; font-weight:normal; color:#888; margin:0 0 16px; }
@@ -65,7 +65,7 @@ PAGE = """
   pre { background:#0a0a0a; color:#888; padding:8px; font-size:11px; max-height:480px; min-width:360px; overflow:auto; border:1px solid #222; margin:0; }
 </style></head>
 <body>
-<h1>claudergbmatrix mock — 32×32, polling server every {{tick_ms}}ms</h1>
+<h1>airgbmatrix mock — 32×32, polling server every {{tick_ms}}ms</h1>
 <div class="row">
   <div id="grid"></div>
   <pre id="state"></pre>

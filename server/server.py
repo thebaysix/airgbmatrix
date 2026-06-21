@@ -22,11 +22,11 @@ _lock = Lock()
 
 # Append-only audit log of every color_idx mutation so that mysterious
 # reassignments (e.g. a session unexpectedly bouncing between palette
-# indices) can be traced after the fact. Set CLAUDERGBMATRIX_SERVER_LOG to
+# indices) can be traced after the fact. Set AIRGBMATRIX_SERVER_LOG to
 # override; tail the file to watch in real time.
 SERVER_LOG = os.environ.get(
-    "CLAUDERGBMATRIX_SERVER_LOG",
-    os.path.join(tempfile.gettempdir(), "claudergbmatrix-server.log"),
+    "AIRGBMATRIX_SERVER_LOG",
+    os.path.join(tempfile.gettempdir(), "airgbmatrix-server.log"),
 )
 
 
@@ -259,7 +259,7 @@ def list_sessions():
 def claim_color():
     """Manually claim a palette index for a session. If another session is
     currently using that index, it gets rotated to the lowest free one so the
-    8 visible swatches stay distinct. Used by the `/claudergb-setcolor` skill.
+    8 visible swatches stay distinct. Used by the `/airgb-color` skill.
 
     Request:  {"session_id": str, "color_idx": int 0..PALETTE_SIZE-1}
     Response: {"ok": true,

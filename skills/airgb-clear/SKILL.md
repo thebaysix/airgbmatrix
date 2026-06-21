@@ -1,6 +1,6 @@
 ---
 name: airgb-clear
-description: Remove the session currently using a given palette color from the claudergbmatrix board. The session record is deleted server-side (frees the palette lease, clears the LED tile) — same effect as the session firing SessionEnd. Use when the user runs `/airgb-clear <color>` or asks to "drop the red session" / "remove the magenta tile" etc.
+description: Remove the session currently using a given palette color from the airgbmatrix board. The session record is deleted server-side (frees the palette lease, clears the LED tile) — same effect as the session firing SessionEnd. Use when the user runs `/airgb-clear <color>` or asks to "drop the red session" / "remove the magenta tile" etc.
 ---
 
 # /airgb-clear
@@ -89,7 +89,7 @@ record will reappear on the next `Stop` hook (which fires after every
 prompt). If the user wants this tab back on the board immediately,
 they can re-fire the working state by hand:
 > ```bash
-> echo '{"session_id":"<this-sid>"}' | bash ~/r/nonrepo/standalone/claudergbmatrix/hooks/notify.sh working
+> echo '{"session_id":"<this-sid>"}' | bash ~/r/nonrepo/standalone/airgbmatrix/hooks/notify.sh working
 > ```
 
 Keep the response tight — confirmation + (only if relevant) one-line fix.

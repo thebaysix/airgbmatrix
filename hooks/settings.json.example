@@ -6,11 +6,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh working"
+            "command": "/absolute/path/to/airgbmatrix/hooks/notify.sh working"
           },
           {
             "type": "command",
-            "command": "/absolute/path/to/claudergbmatrix/hooks/tint_terminal.sh"
+            "command": "/absolute/path/to/airgbmatrix/hooks/tint_terminal.sh"
           }
         ]
       }
@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh pending"
+            "command": "/absolute/path/to/airgbmatrix/hooks/notify.sh pending"
           }
         ]
       }
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh stopped"
+            "command": "/absolute/path/to/airgbmatrix/hooks/notify.sh stopped"
           }
         ]
       }
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh awaiting"
+            "command": "/absolute/path/to/airgbmatrix/hooks/notify.sh awaiting"
           }
         ]
       }
@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh tool-start"
+            "command": "/absolute/path/to/airgbmatrix/hooks/notify.sh tool-start"
           }
         ]
       }
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/absolute/path/to/claudergbmatrix/hooks/notify.sh closed"
+            "command": "/absolute/path/to/airgbmatrix/hooks/notify.sh closed"
           }
         ]
       }
