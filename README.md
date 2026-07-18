@@ -5,6 +5,8 @@ doing — one tile per session, colored by session GUID, with a live token +
 code-change histogram of the most recent turns (12 columns wide; a turn that
 edited files takes 2 columns, so roughly 6–12 turns of history per session).
 
+**[▶ Watch the demo](#demo)** — the board updating live as sessions work.
+
 ```
 +----+------------+
 |COL | HISTOGRAM  |   <- one tile = one Claude Code session (16×8 px)
@@ -789,4 +791,10 @@ Filed for later consideration; not on the active roadmap.
   signal, or repurpose as a generic "tool in progress" indicator
   (semantics shift but visual works). Search the repo for
   `BLINK_ON_PERMISSIONS` to find every gated block for surgical removal.
+
+## Demo
+
+<video src="https://github.com/thebaysix/airgbmatrix/raw/main/media/airgbboard-demo-1.mp4" controls muted width="100%"></video>
+
+_If the player doesn't load, [watch/download the clip directly](https://github.com/thebaysix/airgbmatrix/raw/main/media/airgbboard-demo-1.mp4)._
 
