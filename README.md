@@ -5,7 +5,7 @@ doing — one tile per session, colored by session GUID, with a live token +
 code-change histogram of the most recent turns (12 columns wide; a turn that
 edited files takes 2 columns, so roughly 6–12 turns of history per session).
 
-**[See the board ↓](#demo)** — eight live Claude Code sessions at a glance.
+**[See the board ↓](#hardware-output)** — live Claude Code sessions at a glance.
 
 ```
 +----+------------+
@@ -792,7 +792,7 @@ Filed for later consideration; not on the active roadmap.
   (semantics shift but visual works). Search the repo for
   `BLINK_ON_PERMISSIONS` to find every gated block for surgical removal.
 
-## Demo
+## Hardware Output
 
 ![The AI RGB Matrix LED panel showing live Claude Code sessions as colored histogram tiles](media/airgbboard-preview-1.jpg)
 
