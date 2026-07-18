@@ -5,7 +5,7 @@ doing — one tile per session, colored by session GUID, with a live token +
 code-change histogram of the most recent turns (12 columns wide; a turn that
 edited files takes 2 columns, so roughly 6–12 turns of history per session).
 
-**[▶ Watch the demo](#demo)** — the board updating live as sessions work.
+**[See the board ↓](#demo)** — eight live Claude Code sessions at a glance.
 
 ```
 +----+------------+
@@ -794,7 +794,5 @@ Filed for later consideration; not on the active roadmap.
 
 ## Demo
 
-<video src="https://github.com/thebaysix/airgbmatrix/raw/main/media/airgbboard-demo-1.mp4" controls muted width="100%"></video>
-
-_If the player doesn't load, [watch/download the clip directly](https://github.com/thebaysix/airgbmatrix/raw/main/media/airgbboard-demo-1.mp4)._
+![The AI RGB Matrix LED panel showing live Claude Code sessions as colored histogram tiles](media/airgbboard-preview-1.jpg)
 
