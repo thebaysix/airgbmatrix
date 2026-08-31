@@ -61,6 +61,29 @@ class RendererTests(unittest.TestCase):
 
         self.assertIn('"tokens": 140', output.getvalue())
 
+    def test_offscreen_token_outlier_does_not_compress_visible_bars(self):
+        visible = [
+            {
+                "msg_id": f"visible-{i}",
+                "tokens": 100,
+                "ts_epoch": 100 - i,
+                "added": 1,
+            }
+            for i in range(6)
+        ]
+        offscreen = {
+            "msg_id": "offscreen",
+            "tokens": 100_000,
+            "ts_epoch": 1,
+        }
+        session = {"turns": visible + [offscreen]}
+
+        self.assertEqual(
+            [turn["msg_id"] for turn in renderer._visible_turns(session)],
+            [turn["msg_id"] for turn in visible],
+        )
+        self.assertEqual(renderer._global_max_tokens([session]), 100)
+
 
 if __name__ == "__main__":
     unittest.main()

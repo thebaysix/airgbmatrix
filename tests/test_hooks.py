@@ -11,17 +11,62 @@ NOTIFY = ROOT / "hooks" / "notify.sh"
 TINT = ROOT / "hooks" / "tint_terminal.sh"
 
 
-def event(event_type, event_id, timestamp, data):
+def event(event_type, event_id, timestamp, data, parent_id=None):
     return {
         "type": event_type,
         "id": event_id,
         "timestamp": timestamp,
-        "parentId": None,
+        "parentId": parent_id,
         "data": data,
     }
 
 
 class HookTests(unittest.TestCase):
+    def run_lifecycle_notify(
+        self,
+        state,
+        payload,
+        owned_copilot_sids=(),
+        registered_copilot_sids=(),
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            copilot_home = tmp_path / "copilot-home"
+            runtime_dir = tmp_path / "runtime"
+            for sid in owned_copilot_sids:
+                (copilot_home / "session-state" / sid).mkdir(parents=True)
+            runtime_dir.mkdir()
+            for sid in registered_copilot_sids:
+                (runtime_dir / sid).touch()
+            capture = tmp_path / "payload.json"
+            fake_curl = tmp_path / "curl"
+            fake_curl.write_text(
+                "#!/usr/bin/env bash\n"
+                "while [ \"$#\" -gt 0 ]; do\n"
+                "  if [ \"$1\" = \"-d\" ]; then\n"
+                "    shift\n"
+                "    printf '%s' \"$1\" > \"$AIRGB_CAPTURE\"\n"
+                "  fi\n"
+                "  shift\n"
+                "done\n"
+                "printf '{\"ok\":true}'\n"
+            )
+            fake_curl.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{tmp_path}:{env['PATH']}"
+            env["AIRGB_CAPTURE"] = str(capture)
+            env["AIRGBMATRIX_RUNTIME_DIR"] = str(runtime_dir)
+            env["COPILOT_HOME"] = str(copilot_home)
+            subprocess.run(
+                [str(NOTIFY), state],
+                input=json.dumps(payload),
+                text=True,
+                env=env,
+                check=True,
+                capture_output=True,
+            )
+            return json.loads(capture.read_text()) if capture.exists() else None
+
     def run_notify(self, transcript_lines, hook_input=None, transcript_sid=None):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -66,9 +111,9 @@ class HookTests(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
-            return json.loads(capture.read_text())
+            return json.loads(capture.read_text()) if capture.exists() else None
 
-    def test_copilot_auxiliary_stop_uses_parent_transcript_session_id(self):
+    def test_copilot_auxiliary_stop_does_not_change_parent_state(self):
         parent_sid = "bc1720c4-c553-4ade-895d-4e63df56a8fd"
         lines = [
             event(
@@ -84,7 +129,130 @@ class HookTests(unittest.TestCase):
             {"sessionId": "550d1419-7e34-4889-9ad2-cc2f8d0ef98a"},
             transcript_sid=parent_sid,
         )
+        self.assertIsNone(payload)
+
+    def test_copilot_auxiliary_prompt_does_not_create_pending_session(self):
+        auxiliary_sid = "3294bbe7-b459-4b77-8211-8debd30e4cab"
+        payload = self.run_lifecycle_notify(
+            "pending",
+            {
+                "sessionId": auxiliary_sid,
+                "prompt": "Review the parent session",
+            },
+        )
+        self.assertIsNone(payload)
+
+    def test_copilot_owned_prompt_sets_parent_session_pending(self):
+        parent_sid = "bc1720c4-c553-4ade-895d-4e63df56a8fd"
+        payload = self.run_lifecycle_notify(
+            "pending",
+            {
+                "sessionId": parent_sid,
+                "prompt": "Continue the parent session",
+            },
+            owned_copilot_sids=[parent_sid],
+        )
         self.assertEqual(payload["id"], parent_sid)
+        self.assertEqual(payload["state"], "working")
+        self.assertTrue(payload["pending"])
+
+    def test_copilot_registered_prompt_supports_custom_config_directory(self):
+        parent_sid = "bc1720c4-c553-4ade-895d-4e63df56a8fd"
+        payload = self.run_lifecycle_notify(
+            "pending",
+            {
+                "sessionId": parent_sid,
+                "prompt": "Continue the parent session",
+            },
+            registered_copilot_sids=[parent_sid],
+        )
+        self.assertEqual(payload["id"], parent_sid)
+        self.assertTrue(payload["pending"])
+
+    def test_copilot_subagent_work_is_not_rendered_as_parent_turn(self):
+        lines = [
+            event(
+                "user.message",
+                "parent-1",
+                "2026-01-01T00:00:00Z",
+                {
+                    "content": "parent prompt",
+                    "interactionId": "parent-interaction-1",
+                },
+            ),
+            event(
+                "assistant.message",
+                "parent-answer-1",
+                "2026-01-01T00:00:01Z",
+                {
+                    "content": "x" * 40,
+                    "interactionId": "parent-interaction-1",
+                },
+            ),
+            event(
+                "user.message",
+                "auxiliary-prompt",
+                "2026-01-01T00:00:02Z",
+                {
+                    "content": "review the parent",
+                    "source": "agent-parent-session",
+                    "interactionId": "auxiliary-interaction",
+                },
+            ),
+            event(
+                "assistant.message",
+                "auxiliary-answer-1",
+                "2026-01-01T00:00:03Z",
+                {
+                    "content": "y" * 4_000,
+                    "interactionId": "auxiliary-interaction",
+                    "parentToolCallId": "task-1",
+                },
+            ),
+            event(
+                "user.message",
+                "parent-2",
+                "2026-01-01T00:00:04Z",
+                {
+                    "content": "steer parent",
+                    "source": "user",
+                    "delivery": "steering",
+                    "interactionId": "parent-interaction-2",
+                },
+            ),
+            event(
+                "assistant.message",
+                "auxiliary-answer-2",
+                "2026-01-01T00:00:05Z",
+                {
+                    "content": "z" * 4_000,
+                    "interactionId": "auxiliary-interaction",
+                    "parentToolCallId": "task-1",
+                },
+            ),
+            event(
+                "assistant.message",
+                "parent-answer-2",
+                "2026-01-01T00:00:06Z",
+                {
+                    "content": "w" * 40,
+                    "interactionId": "parent-interaction-2",
+                },
+            ),
+            event(
+                "assistant.turn_end",
+                "auxiliary-end",
+                "2026-01-01T00:00:07Z",
+                {"turnId": "0"},
+                parent_id="auxiliary-answer-2",
+            ),
+        ]
+
+        turns = self.run_notify(lines)["turns"]
+        self.assertEqual([turn["msg_id"] for turn in turns], ["parent-1", "parent-2"])
+        self.assertEqual([turn["tokens"] for turn in turns], [13, 13])
+        self.assertEqual(turns[1]["ts"], "2026-01-01T00:00:06Z")
+        self.assertTrue(all(turn["metrics_version"] == 4 for turn in turns))
 
     def test_copilot_counts_only_successful_file_mutation_diffs(self):
         lines = [
@@ -248,7 +416,7 @@ class HookTests(unittest.TestCase):
         self.assertEqual((turns[1]["added"], turns[1]["removed"]), (0, 0))
         self.assertFalse(turns[1]["added_any"])
         self.assertFalse(turns[1]["removed_any"])
-        self.assertTrue(all(turn["metrics_version"] == 3 for turn in turns))
+        self.assertTrue(all(turn["metrics_version"] == 4 for turn in turns))
 
     def test_copilot_compaction_adds_marker_without_resetting_turn_volume(self):
         lines = [
@@ -325,7 +493,7 @@ class HookTests(unittest.TestCase):
             },
         )["turns"][0]
         self.assertEqual(turn["tokens"], 13)
-        self.assertEqual(turn["metrics_version"], 3)
+        self.assertEqual(turn["metrics_version"], 4)
 
     def test_tint_accepts_copilot_camel_case_session_id(self):
         with tempfile.TemporaryDirectory() as tmp:

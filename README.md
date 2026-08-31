@@ -236,6 +236,14 @@ The white bar is relative token use within that user turn:
   four characters per token. It excludes hook bookkeeping, telemetry, and
   UI-only `detailedContent`. A successful `session.compaction_complete` emits
   the compact marker but does not change the surrounding turn's token count.
+  Shared-transcript subagent streams are excluded; only the result returned to
+  the parent contributes to the parent's turn.
+
+White heights are intentionally relative rather than linear: the renderer
+square-root scales each visible turn against the largest turn that actually
+fits on the board, then quantizes to the tile's 1-8 pixel range. Pending and
+code columns are included in that visibility calculation, so an off-screen
+outlier cannot flatten the bars that are displayed.
 
 Claude Code change counts sum `added` / `removed` across all
 Edit/Write/MultiEdit `tool_use` blocks in a user-turn, computed with
@@ -280,8 +288,16 @@ green/red bars from arbitrary command output.
 
 Copilot auxiliary agents may fire `agentStop` with a transient session ID
 while referencing the parent session's `events.jsonl`. For stopped events,
-airgbmatrix treats the transcript directory UUID as canonical so an auxiliary
-completion updates the parent tile instead of creating a duplicate session.
+airgbmatrix compares the event ID with the transcript directory UUID and
+ignores mismatches. This prevents both a duplicate session and a false
+`stopped` transition on the still-running parent.
+Copilot also runs `userPromptSubmitted` hooks inside YAML subagents before a
+transcript path is available. `sessionStart` registers real session IDs in a
+small runtime directory; the Copilot state directory covers an initial prompt
+that races just ahead of registration. Unregistered, non-owning subagent IDs
+are ignored rather than creating permanently pending empty tiles. Subagent
+`user.message` streams in the shared transcript are also excluded from the
+parent's turn histogram.
 
 
 ## Hooks

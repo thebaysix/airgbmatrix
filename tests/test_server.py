@@ -117,6 +117,73 @@ class ServerMergeTests(unittest.TestCase):
         self.assertTrue(merged["added_any"])
         self.assertTrue(merged["removed_any"])
 
+    def test_parser_upgrade_prunes_turns_omitted_from_new_snapshot(self):
+        self.post_turn(
+            {
+                "msg_id": "real-turn",
+                "metrics_version": 3,
+                "tokens": 80,
+                "ts": "2026-01-01T00:00:00Z",
+            }
+        )
+        self.post_turn(
+            {
+                "msg_id": "obsolete-subagent-turn",
+                "metrics_version": 3,
+                "tokens": 800,
+                "ts": "2026-01-01T00:00:01Z",
+            }
+        )
+
+        response = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "stopped",
+                "turns": [
+                    {
+                        "msg_id": "real-turn",
+                        "metrics_version": 4,
+                        "tokens": 70,
+                        "ts": "2026-01-01T00:00:02Z",
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        turns = server._sessions["session-1"]["turns"]
+        self.assertEqual([turn["msg_id"] for turn in turns], ["real-turn"])
+        self.assertEqual(turns[0]["tokens"], 70)
+        self.assertEqual(server._sessions["session-1"]["metrics_version"], 4)
+
+        stale_response = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "stopped",
+                "turns": [
+                    {
+                        "msg_id": "real-turn",
+                        "metrics_version": 3,
+                        "tokens": 80,
+                        "ts": "2026-01-01T00:00:00Z",
+                    },
+                    {
+                        "msg_id": "obsolete-subagent-turn",
+                        "metrics_version": 3,
+                        "tokens": 800,
+                        "ts": "2026-01-01T00:00:01Z",
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(stale_response.status_code, 200)
+        turns = server._sessions["session-1"]["turns"]
+        self.assertEqual([turn["msg_id"] for turn in turns], ["real-turn"])
+        self.assertEqual(turns[0]["tokens"], 70)
+
 
 if __name__ == "__main__":
     unittest.main()

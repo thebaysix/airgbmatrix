@@ -25,7 +25,22 @@ Copilot's native hook payload uses `sessionId` and `transcriptPath`; Claude's
 uses `session_id` and `transcript_path`. Both accessors are accepted.
 Auxiliary Copilot agents can report a transient `sessionId` while sharing the
 parent transcript; for stopped events, the UUID containing `events.jsonl` is
-the canonical board identity.
+the canonical board identity. A mismatched auxiliary stop is ignored rather
+than redirected, because redirecting it would mark the still-running parent
+session as stopped.
+
+YAML subagents also inherit `userPromptSubmitted`, but that payload has no
+transcript path and the subagent never receives `sessionStart` or `sessionEnd`.
+The hook records IDs seen at `sessionStart` in a runtime directory, with
+`${COPILOT_HOME:-~/.copilot}/session-state` as an initial-prompt fallback.
+Unregistered, non-owning prompt IDs are ignored, preventing an empty pending
+tile from surviving after the subagent exits. This registration also supports
+Copilot's `--config-dir` override after `sessionStart`.
+
+The shared transcript includes the subagent's own `user.message`, assistant,
+and tool events. airgbmatrix recognizes `source: "agent-..."`,
+`interactionId`, and `parentToolCallId` metadata and excludes those streams
+from the parent session's turn and token histograms.
 
 ## Transcript contracts
 

@@ -72,6 +72,29 @@ if [ -z "${SID:-}" ]; then
   exit 0
 fi
 
+# Copilot YAML subagents inherit user-level userPromptSubmitted hooks, but use
+# transient session IDs while writing into the parent session's transcript.
+# They never receive sessionStart/sessionEnd. Track IDs seen by sessionStart;
+# the state-directory fallback covers the initial prompt, which Copilot can
+# emit just before sessionStart. Claude payloads use snake_case and bypass this.
+if printf '%s' "$INPUT" | jq -e 'has("sessionId")' >/dev/null 2>&1 \
+    && [[ "$SID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+  COPILOT_SESSION_REGISTRY="${AIRGBMATRIX_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/airgbmatrix-copilot-sessions}"
+  COPILOT_SESSION_MARKER="$COPILOT_SESSION_REGISTRY/$SID"
+  if [ "$ARG" = "working" ]; then
+    mkdir -p "$COPILOT_SESSION_REGISTRY" 2>/dev/null || true
+    : > "$COPILOT_SESSION_MARKER" 2>/dev/null || true
+  elif [ "$ARG" = "closed" ]; then
+    rm -f "$COPILOT_SESSION_MARKER" 2>/dev/null || true
+  elif [ "$ARG" = "pending" ]; then
+    COPILOT_STATE_ROOT="${COPILOT_HOME:-$HOME/.copilot}/session-state"
+    if [ ! -e "$COPILOT_SESSION_MARKER" ] \
+        && [ ! -d "$COPILOT_STATE_ROOT/$SID" ]; then
+      exit 0
+    fi
+  fi
+fi
+
 # --- BLINK_ON_PERMISSIONS feature gate ---
 # Notification hook fires for both permission prompts AND idle waits. Only
 # the permission case matters here; filter by checking the `message` field
@@ -90,12 +113,14 @@ TURNS_JSON="[]"
 if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
  if head -1 "$TRANSCRIPT" 2>/dev/null | jq -e 'has("parentId")' >/dev/null 2>&1; then
   # Copilot auxiliary agents can emit agentStop with their own transient
-  # sessionId while pointing at the parent session's events.jsonl. The
-  # transcript directory is the durable session identity; using the auxiliary
-  # id would create a phantom board tile containing the parent's turns.
+  # sessionId while pointing at the parent session's events.jsonl. Ignore that
+  # stop: redirecting it would falsely mark the still-running parent stopped,
+  # while trusting it would create a phantom tile.
   TRANSCRIPT_SID=$(basename "$(dirname "$TRANSCRIPT")")
   if [[ "$TRANSCRIPT_SID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
-    SID="$TRANSCRIPT_SID"
+    if [ "$TRANSCRIPT_SID" != "$SID" ]; then
+      exit 0
+    fi
   fi
 
   # --- GitHub Copilot transcript (events.jsonl): {type,data,id,timestamp,parentId}.
@@ -139,15 +164,29 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
               and (($line | startswith("---")) | not) then .r += 1
          else . end)
         | {a,r} end;
-    reduce .[] as $e ({groups:[], cur:null, tools:{}};
+    reduce .[] as $e ({
+      groups:[], cur:null, tools:{}, aux_interactions:{}, aux_events:{}
+    };
       ($e.type) as $t
-      | if $t == "user.message" then
+      | ($e.data.interactionId // "") as $interaction
+      | (($t == "user.message"
+          and (($e.data.source // "") | startswith("agent-")))
+         or (($interaction != "")
+             and (.aux_interactions[$interaction] // false))
+         or ($e.data.parentToolCallId? != null)
+         or (.aux_events[($e.parentId // "")] // false)) as $is_aux
+      | if $is_aux then
+          (if $interaction == "" then .
+           else .aux_interactions[$interaction] = true end)
+          | (if ($e.id // "") == "" then .
+             else .aux_events[$e.id] = true end)
+        elif $t == "user.message" then
           (if .cur != null then .groups += [.cur] else . end)
           | .cur = {
               msg_id:($e.id // ($e.timestamp+"_u")),
               kind:"turn",
               ts:$e.timestamp,
-              metrics_version:3,
+              metrics_version:4,
               chars:($e | turn_chars),
               tokens:([1, ((($e | turn_chars)/4)|floor)] | max),
               added:0,
@@ -163,7 +202,7 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
                msg_id:("orphan_"+($e.timestamp//"0")),
                kind:"turn",
                ts:$e.timestamp,
-               metrics_version:3,
+               metrics_version:4,
                chars:0,
                tokens:1,
                added:0,
@@ -188,7 +227,7 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
           .groups += [{
             msg_id:("copilot:"+$e.id),
             kind:"compact",
-            metrics_version:3,
+            metrics_version:4,
             tokens:0,
             ts:$e.timestamp,
             added:0,
@@ -335,7 +374,7 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
     | map({
         msg_id: .msg_id,
         kind: .kind,
-        metrics_version: 3,
+        metrics_version: 4,
         tokens: .tokens,
         ts: .ts,
         added: .added,

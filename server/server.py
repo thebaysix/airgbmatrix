@@ -159,13 +159,37 @@ def upsert_session():
             # Merge by msg_id (= user_uuid for the user-turn schema). Within one
             # metrics version the counters are monotonic as transcript data
             # flushes, so max() handles backfill and stale re-POSTs. A newer
-            # metrics version replaces the counters once, allowing parser fixes
-            # to repair already-persisted bad data on the next Stop hook.
+            # metrics version replaces the complete snapshot once, allowing
+            # parser fixes to repair counters and remove newly excluded turns
+            # on the next Stop hook.
             #
             # Use `prev_turn` for the inner loop — NOT `existing`, which holds
             # the session-level record we still need below for color_idx and
             # pending preservation. (Earlier this loop shadowed `existing` and
             # silently nuked color leases on every Stop POST that shipped turns.)
+            incoming_metrics_version = max(
+                (_nonneg_int(t.get("metrics_version")) for t in incoming),
+                default=0,
+            )
+            stored_metrics_version = max(
+                _nonneg_int(existing.get("metrics_version")),
+                max(
+                    (_nonneg_int(t.get("metrics_version")) for t in turns),
+                    default=0,
+                ),
+            )
+            # A parser upgrade is an authoritative snapshot, not only a set of
+            # per-ID corrections. Reset first so turns that the new parser
+            # deliberately excludes (for example, Copilot subagent prompts)
+            # disappear instead of surviving forever under obsolete msg_ids.
+            if incoming_metrics_version > stored_metrics_version:
+                turns = []
+            elif incoming_metrics_version < stored_metrics_version:
+                # Reject an older snapshot wholesale. Comparing only per turn
+                # would let an obsolete ID that v4 pruned reappear as a
+                # seemingly new v3 turn.
+                incoming = []
+
             by_id: dict[str, dict] = {}
             for t in turns:
                 mid = t.get("msg_id")
@@ -256,6 +280,15 @@ def upsert_session():
             "turns": turns,
             "pending": pending,
         }
+        metrics_version = max(
+            _nonneg_int(existing.get("metrics_version")),
+            max(
+                (_nonneg_int(t.get("metrics_version")) for t in turns),
+                default=0,
+            ),
+        )
+        if metrics_version > 0:
+            new_record["metrics_version"] = metrics_version
         # --- BLINK_ON_PERMISSIONS feature gate ---
         # When enabled, accept and persist an `awaiting` flag (true while the
         # session is blocked on a permission prompt). When disabled, the flag

@@ -56,9 +56,27 @@ def _turn_epoch(turn: dict) -> int:
 
 
 def _visible_turns(s: dict) -> list[dict]:
-    # Newest HIST_W per session — same set the renderer actually paints, so
-    # scale isn't compressed by aged-off-screen turns still in storage.
-    return sorted(s.get("turns") or [], key=_turn_epoch, reverse=True)[:HIST_W]
+    # Match the renderer's real column budget. Pending animation consumes one
+    # column, and a turn with code changes consumes a second column. Merely
+    # taking the newest HIST_W turns can include off-screen outliers and
+    # compress every white bar that is actually visible.
+    visible = []
+    col = 1 if s.get("pending") else 0
+    for turn in sorted(s.get("turns") or [], key=_turn_epoch, reverse=True):
+        if col >= HIST_W:
+            break
+        visible.append(turn)
+        col += 1
+        kind = turn.get("kind") or "turn"
+        has_code = (
+            (turn.get("added", 0) or 0) > 0
+            or (turn.get("removed", 0) or 0) > 0
+            or bool(turn.get("added_any"))
+            or bool(turn.get("removed_any"))
+        )
+        if kind == "turn" and has_code and col < HIST_W:
+            col += 1
+    return visible
 
 
 def _global_max_tokens(sessions: list[dict]) -> int:
