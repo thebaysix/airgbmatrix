@@ -156,11 +156,11 @@ def upsert_session():
         turns = list(existing.get("turns") or [])
 
         if isinstance(incoming, list):
-            # Max-merge by msg_id (= user_uuid for the user-turn schema). For a
-            # fixed user-turn, tokens/added/removed are monotonically
-            # non-decreasing as the transcript flushes more assistant lines, so
-            # max() is the natural merge — handles transcript-flush backfill
-            # and is immune to any hypothetical re-POST that under-counts.
+            # Merge by msg_id (= user_uuid for the user-turn schema). Within one
+            # metrics version the counters are monotonic as transcript data
+            # flushes, so max() handles backfill and stale re-POSTs. A newer
+            # metrics version replaces the counters once, allowing parser fixes
+            # to repair already-persisted bad data on the next Stop hook.
             #
             # Use `prev_turn` for the inner loop — NOT `existing`, which holds
             # the session-level record we still need below for color_idx and
@@ -185,20 +185,52 @@ def upsert_session():
                 new_ts_epoch = _epoch_from_iso(ts)
                 prev_turn = by_id.get(mid, {})
                 old_ts_epoch = prev_turn.get("ts_epoch") or 0
+                prev_metrics_version = _nonneg_int(prev_turn.get("metrics_version"))
+                new_metrics_version = _nonneg_int(t.get("metrics_version"))
+                replace_metrics = new_metrics_version > prev_metrics_version
+                merge_metrics = new_metrics_version == prev_metrics_version
+                incoming_added = _nonneg_int(t.get("added"))
+                incoming_removed = _nonneg_int(t.get("removed"))
+                if replace_metrics:
+                    merged_tokens = tok
+                    merged_added = incoming_added
+                    merged_removed = incoming_removed
+                    merged_added_any = bool(t.get("added_any"))
+                    merged_removed_any = bool(t.get("removed_any"))
+                elif merge_metrics:
+                    merged_tokens = max(
+                        prev_turn.get("tokens", 0),
+                        tok if isinstance(tok, int) else 0,
+                    )
+                    merged_added = max(prev_turn.get("added") or 0, incoming_added)
+                    merged_removed = max(prev_turn.get("removed") or 0, incoming_removed)
+                    merged_added_any = (
+                        bool(prev_turn.get("added_any")) or bool(t.get("added_any"))
+                    )
+                    merged_removed_any = (
+                        bool(prev_turn.get("removed_any")) or bool(t.get("removed_any"))
+                    )
+                else:
+                    merged_tokens = prev_turn.get("tokens", 0)
+                    merged_added = prev_turn.get("added") or 0
+                    merged_removed = prev_turn.get("removed") or 0
+                    merged_added_any = bool(prev_turn.get("added_any"))
+                    merged_removed_any = bool(prev_turn.get("removed_any"))
                 by_id[mid] = {
                     "msg_id": mid,
                     "kind": kind,
-                    "tokens": max(prev_turn.get("tokens", 0), tok if isinstance(tok, int) else 0),
+                    "metrics_version": max(prev_metrics_version, new_metrics_version),
+                    "tokens": merged_tokens,
                     "ts": ts if new_ts_epoch >= old_ts_epoch else prev_turn.get("ts", ts),
                     "ts_epoch": max(old_ts_epoch, new_ts_epoch),
-                    "added": max(prev_turn.get("added") or 0, _nonneg_int(t.get("added"))),
-                    "removed": max(prev_turn.get("removed") or 0, _nonneg_int(t.get("removed"))),
+                    "added": merged_added,
+                    "removed": merged_removed,
                     # _any flags survive once set — if any assistant call in a
                     # user-turn added/removed lines (even net-zero refactors),
                     # the flag stays true so the renderer floors are visible
                     # across re-POSTs.
-                    "added_any": bool(prev_turn.get("added_any")) or bool(t.get("added_any")),
-                    "removed_any": bool(prev_turn.get("removed_any")) or bool(t.get("removed_any")),
+                    "added_any": merged_added_any,
+                    "removed_any": merged_removed_any,
                 }
             turns = sorted(by_id.values(), key=lambda x: x.get("ts") or "")[-MAX_TURNS:]
         elif isinstance(legacy_tokens, int) and legacy_tokens > 0:

@@ -33,6 +33,14 @@ HTTP_TIMEOUT_S = 1.0
 DEBUG_ROW = MATRIX_H // 2 + 2  # 1 blank row below the matrix (which takes H/2 rows)
 
 
+def _latest_tokens(turns):
+    positive = [t for t in turns if (t.get("tokens", 0) or 0) > 0]
+    if not positive:
+        return 0
+    latest = max(positive, key=lambda t: (t.get("ts_epoch", 0), t.get("ts", "")))
+    return latest.get("tokens", 0) or 0
+
+
 def _paint_debug(sessions, now_epoch, fetch_ok):
     """Paint a copy-pasteable JSON dump below the matrix."""
     summary = (
@@ -55,7 +63,7 @@ def _paint_debug(sessions, now_epoch, fetch_ok):
             "state": s.get("state"),
             "pending": bool(s.get("pending")),
             "turns": len(turns),
-            "tokens": sum(t.get("tokens", 0) for t in turns),
+            "context_tokens": _latest_tokens(turns),
             "added": sum(t.get("added", 0) or 0 for t in turns),
             "removed": sum(t.get("removed", 0) or 0 for t in turns),
             "age_s": age_s,

@@ -1,185 +1,95 @@
-# Copilot CLI migration scoping
+# Copilot CLI integration notes
 
-E+D Claude Code accounts get removed **2026-06-30**. This doc maps what
-claudergbmatrix depends on in Claude Code, what GitHub Copilot CLI offers
-in its place, and what porting actually costs.
+The Copilot CLI migration is complete. airgbmatrix remains dual-tool: the
+same hook scripts accept Copilot CLI's camelCase payloads and Claude Code's
+snake_case payloads, while each engine keeps its own hook configuration.
 
-## What this project depends on in Claude Code
+## Hook configuration
 
-### Hooks (`~/.claude/settings.json`)
+Copilot CLI loads user-global hooks from `~/.copilot/hooks/*.json`. Start from
+`hooks/copilot-hooks.json.example`; replace the absolute script paths and set
+`CLAUDE_LED_HOST` to the state server. Copilot loads hook changes at startup,
+so restart the CLI after editing the file.
 
-All six hook events are wired:
+Claude Code continues to load `~/.claude/settings.json`; start from
+`hooks/settings.json.example`. The event mapping is:
 
-| Event | Script call | Why |
+| Copilot CLI | Claude Code | airgbmatrix action |
 |---|---|---|
-| `SessionStart` | `notify.sh working` + `tint_terminal.sh` | Register session, leverage `source` field (startup/resume/compact/clear) to drop full-column compact/clear markers in the histogram. |
-| `UserPromptSubmit` | `notify.sh pending` | Flip to pending so renderer animates the loading bar. |
-| `Stop` | `notify.sh stopped` | Trigger transcript walk → per-turn token + code-delta aggregation. |
-| `Notification` | `notify.sh awaiting` | (Currently no-op — feature flag off; see README known limitations.) |
-| `PreToolUse` | `notify.sh tool-start` | (Currently no-op.) |
-| `SessionEnd` | `notify.sh closed` | Drop session record + free palette lease. |
+| `sessionStart` | `SessionStart` | `notify.sh working`, `tint_terminal.sh` |
+| `userPromptSubmitted` | `UserPromptSubmit` | `notify.sh pending` |
+| `agentStop` | `Stop` | `notify.sh stopped` |
+| `sessionEnd` | `SessionEnd` | `notify.sh closed` |
 
-Stdin contract relied on by `notify.sh`:
-- `session_id` (every hook)
-- `transcript_path` (Stop) → JSONL with `type`, `uuid`, `timestamp`,
-  `message.id`, `message.usage.{input_tokens,output_tokens,cache_creation_input_tokens}`,
-  `message.content[]` with `tool_use` blocks carrying Edit/MultiEdit/Write
-  `input` fields.
-- `source` (SessionStart) ∈ {startup, resume, compact, clear}
-- `message` (Notification) — substring matched for `[Pp]ermission`.
+Copilot's native hook payload uses `sessionId` and `transcriptPath`; Claude's
+uses `session_id` and `transcript_path`. Both accessors are accepted.
 
-Config scope: **user-global** at `~/.claude/settings.json`. Fires for every
-session in every cwd. This is load-bearing for claudergbmatrix's "ambient
-across all sessions" design.
+## Transcript contracts
 
-### Skills (`~/.claude/skills/<name>/SKILL.md`)
+### Copilot CLI
 
-Three skills, each a single `SKILL.md` with frontmatter (`name`,
-`description`) and a markdown body that tells the model to curl the local
-server. No SDK calls, no special tool grants.
+Copilot persists `events.jsonl` records with `{type,data,id,timestamp,parentId}`.
+airgbmatrix groups records by `user.message`.
 
-- `claudergb-color <name>`
-- `claudergb-clear <name>`
-- `claudergb-status`
+`assistant.usage` is ephemeral and is not available to an `agentStop` hook.
+The context bar therefore uses a proxy built only from persisted model-visible
+content:
 
-Also user-global (in `~/.claude/skills/`).
+- system message content
+- transformed user prompt content
+- assistant content, reasoning text, and tool requests
+- `tool.execution_complete.data.result.content`
 
-### Not Claude-specific
+It intentionally excludes event envelopes, telemetry, hook events, and
+`result.detailedContent`. A successful `session.compaction_complete` resets
+the estimate to the exact `postCompactionTokens` value and creates a compact
+marker.
 
-`server/`, `s3/`, palette logic, renderer, `state.json` — all vanilla
-Python + Flask + HTTP. The Pi/S3 hardware path doesn't know Claude Code
-exists. **Only `hooks/` and `skills/` are CC-coupled.**
+Code deltas require correlating `tool.execution_start` and
+`tool.execution_complete` by `toolCallId`; completion events do not carry the
+tool name. Only successful built-in mutation tools are counted:
 
-## Copilot CLI parity (per research)
+- `edit`
+- `create`
+- `apply_patch`
+- `str_replace_editor`
 
-### Hooks
+For those tools, `+` and `-` lines are counted only inside unified-diff hunks.
+This is a trust boundary, not just an optimization. Copilot read tools also
+store synthetic file diffs in `detailedContent`, and arbitrary shell output
+may begin with `+` or `-`; treating either as a code diff creates false bars.
 
-Copilot CLI has hooks with **broader coverage** than Claude's (adds
-`postToolUse`, `subagentStart/Stop`, `preCompact`, `errorOccurred`, etc.).
-Two payload dialects: native camelCase, and a **snake_case VS Code compat
-dialect** that preserves `session_id` / `transcript_path` field names —
-the latter is what minimizes `jq` diffs in `notify.sh`.
+Shell and MCP tools can mutate files, but their completion payload does not
+guarantee an authoritative before/after diff. airgbmatrix reports no code
+delta for them rather than inventing one from display text.
 
-| Claude event | Copilot event | Drop-in for our use? |
-|---|---|---|
-| SessionStart | `sessionStart` | Yes for register, **No** for compact/clear markers — `source` enum is {startup, resume, new}, lacks `compact`/`clear`. |
-| UserPromptSubmit | `userPromptSubmitted` | Yes. |
-| Stop | `agentStop` | Yes — has `transcript_path`. |
-| Notification | `notification` | Yes (richer `notification_type` enum incl. `permission_prompt`). Doesn't fix our upstream limitation (post-resolution firing) — that lives in Claude Code itself. |
-| PreToolUse | `preToolUse` | Yes (richer — can mutate args; we don't need that). |
-| SessionEnd | `sessionEnd` | Yes. |
-| — | `preCompact` | **Recovers the compact signal** lost on `sessionStart`. |
-| — | (none) | No clean replacement for `source=clear`. |
+### Claude Code
 
-### Skills
+Claude transcripts contain `user` / `assistant` records. airgbmatrix groups
+assistant calls under the preceding real user prompt, keeps the largest
+reported context size in that group, and aggregates Edit/MultiEdit/Write code
+deltas. Context includes input, output, cache-creation, and cache-read tokens.
 
-Near drop-in. Same `SKILL.md` + frontmatter convention. Personal skills
-live at `~/.copilot/skills/` (or `~/.agents/skills/`); project skills at
-`.github/skills/`, `.claude/skills/`, or `.agents/skills/`. Slash command
-invocation is identical.
+Claude's `SessionStart.source` still supplies `/compact` and `/clear` markers.
+Copilot supplies compact markers through its persisted compaction-complete
+event and has no equivalent clear marker.
 
-### The two real blockers
+## Agency launcher impact
 
-1. **No documented user-global hooks settings.** Copilot hooks are
-   loaded from `.github/hooks/*.json` in the current repo. There's no
-   public equivalent of `~/.claude/settings.json` that wires hooks for
-   every session regardless of cwd. claudergbmatrix's whole point is
-   ambient across all sessions — so this is the load-bearing gap.
+`agency copilot` launches the installed Copilot CLI, injects a session ID when
+it can, and forwards non-Agency arguments to the child process. Permission
+flags such as `--yolo` affect tool approval, not transcript event semantics.
+The important behavior change from `agency claude` is therefore the engine and
+its transcript schema, not the permission mode.
 
-2. **Transcript schema undocumented.** `transcript_path` is exposed,
-   but the format (JSONL? same field shape? `message.usage` present?
-   `tool_use.input` for Edit/MultiEdit/Write?) is not documented
-   publicly. The per-user-turn aggregator in `notify.sh` is built on
-   Claude's specific schema; until we see a real Copilot transcript,
-   we don't know if the jq pipeline survives or needs a rewrite.
+Agency's public CLI guide documents `agency copilot` as the interactive launch
+path: `docs/agency/CLI/index.md`, "Launch an interactive session." The launcher
+behavior is implemented in `client/agency/src/copilot.rs` where the command is
+constructed, a session ID is injected, and filtered extra arguments are
+forwarded.
 
-## Migration plan
+## References
 
-### Phase A — preflight (do once, no rush, anytime before 6/30)
-
-1. Install Copilot CLI via Agency (`agency copilot`).
-2. Capture one sample `Stop` hook payload + transcript file. Decide:
-   does `jq` need real changes or just field-name swaps?
-3. Hunt for an undocumented user-global hooks config. Check `~/.copilot/`,
-   `~/.agents/`, Agency docs, and `copilot --help`. If nothing, file a
-   feature request via `/feedback` — this is a real gap for ambient-status
-   tooling, and we're early enough in the consolidation that it might
-   get prioritized.
-
-### Phase B — port skills (low-risk, do first)
-
-```bash
-mkdir -p ~/.copilot/skills
-cp -r ~/.claude/skills/claudergb-{color,clear,status} ~/.copilot/skills/
-```
-
-Frontmatter is compatible. Body text refers to "Claude Code" in a couple
-of places — global-replace with "Copilot CLI" or just "the agent". The
-curl-the-server logic is unaffected. **Validate**: `/claudergb-status`
-runs and renders the table.
-
-### Phase C — port hooks (the actual work)
-
-Decision branch on Phase A outcome:
-
-- **If a global hook config exists**: write a new `settings.json`-style
-  file there with the snake_case dialect. Rename `SessionStart` →
-  `sessionStart` etc.; field accessors in `notify.sh` (`.session_id`,
-  `.transcript_path`, `.source`, `.message`) survive unchanged.
-
-- **If only repo-scoped hooks are supported**: pivot the design. Two
-  options:
-  - **Repo-scoped acceptance**: install `.github/hooks/*.json` only in
-    repos where you actually want the LED visualization. Lose the "every
-    session" property. Honest tradeoff.
-  - **Wrapper script**: alias `copilot` to a wrapper that injects an
-    ambient hook config. Brittle, but preserves behavior.
-
-Either way:
-- Rewrite the `SessionStart`-with-`source=compact` branch to fire on
-  `preCompact` instead. There's no `clear` analog — drop that marker
-  type, or use Notification on `notification_type=session_cleared` if
-  Copilot emits one.
-- Re-validate the transcript jq pipeline against a real sample. If
-  `message.usage` field shape differs, the dedup + sum logic needs
-  surgical fixes, not a rewrite.
-
-### Phase D — README + settings.example updates
-
-- `hooks/settings.json.example` → keep as Claude reference, add a
-  parallel `hooks/copilot-hooks.example.json`.
-- README: dual-path install instructions until 6/30, then drop the
-  Claude path.
-
-### Phase E — cleanup (after 6/30)
-
-Delete `~/.claude/settings.json` references, archive the Claude skills
-dir, point all docs at the Copilot setup.
-
-## Cost estimate
-
-- **Skills port**: ~15 min, mostly copy-paste.
-- **Hooks port if global config exists**: ~1 hour (rename events,
-  validate transcript schema, run end-to-end).
-- **Hooks port if only repo-scoped**: ~3 hours + design pivot, OR accept
-  that the board only fires for instrumented repos.
-- **Transcript schema mismatch (worst case)**: ~half a day to rewrite
-  the jq aggregator. Bounded — the inputs we care about (tokens,
-  added/removed lines, msg dedup) are conceptually simple.
-
-## Decision point
-
-Don't migrate yet. Wait until Phase A is cheap (Copilot CLI installed
-anyway for daily work) and we have an actual transcript sample to look
-at. Most of the risk lives in two unknowns; both resolve with five
-minutes of empirical observation.
-
-## Sources
-
-Research notes from agent run on 2026-05-12 — verify against the live
-docs before each phase:
-
-- https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli
 - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-hooks-reference
 - https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-hooks
 - https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills

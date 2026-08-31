@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "bash": "/absolute/path/to/airgbmatrix/hooks/notify.sh working",
+        "timeoutSec": 5,
+        "env": {
+          "CLAUDE_LED_HOST": "localhost"
+        }
+      },
+      {
+        "bash": "/absolute/path/to/airgbmatrix/hooks/tint_terminal.sh",
+        "timeoutSec": 5,
+        "env": {
+          "CLAUDE_LED_HOST": "localhost"
+        }
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "bash": "/absolute/path/to/airgbmatrix/hooks/notify.sh pending",
+        "timeoutSec": 5,
+        "env": {
+          "CLAUDE_LED_HOST": "localhost"
+        }
+      }
+    ],
+    "agentStop": [
+      {
+        "bash": "/absolute/path/to/airgbmatrix/hooks/notify.sh stopped",
+        "timeoutSec": 8,
+        "env": {
+          "CLAUDE_LED_HOST": "localhost"
+        }
+      }
+    ],
+    "sessionEnd": [
+      {
+        "bash": "/absolute/path/to/airgbmatrix/hooks/notify.sh closed",
+        "timeoutSec": 5,
+        "env": {
+          "CLAUDE_LED_HOST": "localhost"
+        }
+      }
+    ]
+  }
+}

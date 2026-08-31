@@ -1,13 +1,14 @@
 # airgbmatrix
 
-An ambient 32×32 RGB LED panel that shows what your Claude Code sessions are
-doing — one tile per session, colored by session GUID, with a live token +
-code-change histogram of the most recent turns (12 columns wide; a turn that
-edited files takes 2 columns, so roughly 6–12 turns of history per session).
+An ambient 32×32 RGB LED panel that shows what your Copilot CLI and Claude
+Code sessions are doing — one tile per session, colored by session GUID, with
+a live context + code-change histogram of the most recent turns (12 columns
+wide; a turn that edited files takes 2 columns, so roughly 6–12 turns of
+history per session).
 
 ```
 +----+------------+
-|COL | HISTOGRAM  |   <- one tile = one Claude Code session (16×8 px)
+|COL | HISTOGRAM  |   <- one tile = one agent session (16×8 px)
 |4×8 |    12×8    |
 +----+------------+
 ```
@@ -21,9 +22,9 @@ edited files takes 2 columns, so roughly 6–12 turns of history per session).
   `server/renderer.py` and `s3/render_frame.py` (default 4); the histogram
   takes whatever's left.
 - **Histogram** (right) — `HIST_W` columns × 8 rows (default 12). Each turn
-  produces a white **token bar** (sqrt-scaled across all sessions); turns
-  that touched code (Edit/Write/MultiEdit) also produce a stacked **code
-  bar** in the next column — both colors anchored at the bottom of the
+  produces a white **context bar** (sqrt-scaled across all sessions); turns
+  that touched code through a recognized file-mutation tool also produce a
+  stacked **code bar** in the next column — both colors anchored at the bottom of the
   column, green block first, red block stacked on top of green. Each color
   independently sqrt-scaled and capped at 4 px (column-half) so a balanced
   max-out fills the full 8 px. 1-px floor per color so single-line edits
@@ -75,7 +76,7 @@ Two hosts plus one MCU plus one panel, joined by three network hops.
 
 ```
 [Cloud devbox WSL]                [Home laptop WSL]            [Home LAN]
- Claude Code                       Flask server :5000           S3 Matrix Portal
+ Copilot CLI / Claude Code         Flask server :5000           S3 Matrix Portal
    │ hook fires                      ↑    state.json (disk)       ↑   2.4GHz WiFi
    notify.sh                         │                            │
    curl POST ─── Tailscale ──────────┘                            │
@@ -90,16 +91,17 @@ Two hosts plus one MCU plus one panel, joined by three network hops.
                                                               + 4700µF cap
 ```
 
-**Data flow per Claude turn.**
+**Data flow per agent turn.**
 
-1. User submits prompt → `UserPromptSubmit` hook → `notify.sh pending`
+1. User submits prompt → `userPromptSubmitted` / `UserPromptSubmit` hook
+   → `notify.sh pending`
    → POST `/session {id, state=working, pending=true}` over Tailscale to
    the laptop.
-2. Claude responds → `Stop` hook → `notify.sh stopped` → reads the
-   transcript, groups assistant messages by preceding user uuid, computes
-   `{msg_id, tokens, added, removed, ts}` per turn (last 16), POSTs
-   `/session {id, state=stopped, pending=false, turns}`. Idempotent
-   upsert on `msg_id` via max-merge.
+2. The agent responds → `agentStop` / `Stop` hook → `notify.sh stopped`
+   → detects the transcript dialect, groups events by preceding user message,
+   computes `{msg_id, tokens, added, removed, ts}` per turn (last 16), POSTs
+   `/session {id, state=stopped, pending=false, turns}`. Idempotent upsert on
+   `msg_id` uses max-merge within a metrics version.
 3. Server writes `state.json` atomically, leases a palette idx via
    `_assign_color_indices`, append-only audit log of color changes to
    the systemd journal.
@@ -124,7 +126,7 @@ scoped Defender rule (TCP 5000, `RemoteAddress 192.168.88.0/24` only)
 plus the Hyper-V vSwitch rule for the WSL mirror. Home subnet
 only. The server itself runs no auth — internal by design.
 
-**Skills (run from any devbox Claude tab):**
+**Skills (run from any devbox agent tab):**
 
 - `/airgb-color <name>` → POST `/claim-color` → server bumps the
   current holder if needed, prints the hex string for manual Windows
@@ -135,14 +137,14 @@ only. The server itself runs no auth — internal by design.
   session.
 
 All three skills resolve their target via `$CLAUDE_LED_HOST:5000` (the
-laptop's Tailscale IP, set in the devbox's `~/.claude/settings.json`).
+laptop's Tailscale IP, set in the devbox hook configuration).
 
 ### Two-host topology (detail)
 
 ```
    Cloud dev box (WSL)                    Home laptop (WSL)
    +───────────────────────────+          +─────────────────────────────+
-   | Claude Code               |          | server.py (Flask:5000)      |
+   | Copilot CLI / Claude Code |          | server.py (Flask:5000)      |
    |   notify.sh ──POST──┐     |          |   ▲           ▲             |
    |   tint_terminal.sh  │     |          |   │           │ poll        |
    |                     │     │ Tailscale│   │       term_renderer.py  |
@@ -163,8 +165,8 @@ laptop's Tailscale IP, set in the devbox's `~/.claude/settings.json`).
 ```
 
 Topology notes: the state server lives on the home laptop so the S3 (on the
-same home LAN) can reach it. Claude Code on the cloud dev box POSTs to the
-laptop's Tailscale IP — set `CLAUDE_LED_HOST` in `~/.claude/settings.json`
+same home LAN) can reach it. Agent hooks on the cloud dev box POST to the
+laptop's Tailscale IP — set `CLAUDE_LED_HOST` in the relevant hook config
 to the laptop's `100.x.y.z` address. The S3 reaches the laptop's Windows
 LAN IP, which proxies into laptop WSL via mirrored networking (or
 `netsh portproxy` as a fallback). See "Laptop-side networking" below.
@@ -176,16 +178,17 @@ board only ever shows currently-open sessions: a `state=closed` POST
 so the next session reusing the slot gets a fresh color. There's no
 background reaper — lifecycle is fully driven by hooks (`SessionStart`
 adds, `SessionEnd` removes) and the `/airgb-color` / `/airgb-clear`
-skills for manual cleanup. If a Claude session ever exits without firing
+skills for manual cleanup. If an agent session ever exits without firing
 SessionEnd (server down at the time, kernel panic, etc.) the stale record
 just sticks around until you `/airgb-clear` it or it gets LRU-evicted
 by an 8th-and-9th session arriving. Endpoints:
 
 - `POST /session` — upsert a session by `id`. Optional `turns` array of
-  `{msg_id, tokens, ts, added, removed}`; the server **upserts by `msg_id`**
+  `{msg_id, metrics_version, tokens, ts, added, removed}`; the server **upserts by `msg_id`**
   (one record per user-turn, identified by the starting user message's uuid)
-  so repeated POSTs are idempotent and a later Stop with refreshed sums
-  overwrites a prior under-count from a transcript-flush race. Each turn is
+  so repeated POSTs are idempotent. Values max-merge within one
+  `metrics_version`; a newer version replaces them so parser fixes can repair
+  persisted bad metrics. Each turn is
   enriched with `ts_epoch` (int seconds) for clients that can't parse ISO
   8601 (e.g. CircuitPython on the S3).
 - `GET /sessions` — list all tracked sessions with their turn buffers,
@@ -213,20 +216,30 @@ one, because `colors.py` differs (CircuitPython has no `colorsys`). Outputs
 match bit-for-bit — verified by running `session_color()` from both modules
 against a fixed input set.
 
-**Hooks** (`hooks/*.sh`) — one shell script per Claude Code lifecycle event.
-Configured in `~/.claude/settings.json` (see `hooks/settings.json.example`).
+**Hooks** (`hooks/*.sh`) — shared scripts for both lifecycle dialects.
+Copilot CLI loads `~/.copilot/hooks/*.json` (see
+`hooks/copilot-hooks.json.example`); Claude Code loads
+`~/.claude/settings.json` (see `hooks/settings.json.example`).
 
 
 ## Token + code model
 
-Per-turn token count = `input_tokens + output_tokens + cache_creation_input_tokens`.
-`cache_read_input_tokens` is excluded — it's roughly constant turn-over-turn
-(the same cached context is re-read each time) and would flatten the histogram
-into uniformly tall bars. What we actually want to surface is the *new* work
-each turn produced.
+The white bar is current context-window size at that turn, not cumulative work:
 
-Per-turn code change = sum of `added` / `removed` across all
-Edit/Write/MultiEdit `tool_use` blocks in that user-turn, computed with
+- **Claude Code:** for each assistant API call, context is
+  `input_tokens + output_tokens + cache_creation_input_tokens +
+  cache_read_input_tokens`; a user-turn keeps the largest call rather than
+  summing tool-loop calls.
+- **Copilot CLI:** persisted `assistant.usage` events are ephemeral, so
+  `notify.sh` estimates context from cumulative model-visible system, prompt,
+  assistant, tool-request, and tool-result content at roughly four characters
+  per token. It excludes hook bookkeeping, telemetry, and UI-only
+  `detailedContent`. A successful `session.compaction_complete` event resets
+  the estimate to Copilot's exact `postCompactionTokens` and emits the compact
+  marker.
+
+Claude Code change counts sum `added` / `removed` across all
+Edit/Write/MultiEdit `tool_use` blocks in a user-turn, computed with
 **net-delta + substring-aware wrap detection**:
 
 - For each Edit (or MultiEdit sub-edit), if `old_string` is empty OR is a
@@ -253,26 +266,39 @@ green/red floor so the activity stays visible. Anchored adds keep
 `removed_any=false` (the substring check), so they don't trigger a red
 floor.
 
+Copilot CLI correlates each `tool.execution_complete` event with its
+`tool.execution_start` by `toolCallId`, then counts `+` / `-` lines inside
+unified-diff hunks only for successful built-in mutation tools: `edit`,
+`create`, `apply_patch`, and `str_replace_editor`. This whitelist is
+intentional: Copilot's read tools also store synthetic diffs in
+`detailedContent`, while shell output can contain arbitrary lines beginning
+with `+` or `-`.
+
+**Visibility limit:** edits performed indirectly by shell commands or MCP
+tools are not included because their result payloads do not provide a
+reliable before/after diff. Missing activity is preferable to inventing
+green/red bars from arbitrary command output.
+
 
 ## Hooks
 
-| Event              | Script                  | What it does                            |
-|--------------------|-------------------------|-----------------------------------------|
-| `SessionStart`     | `notify.sh working`     | Marks session live in the state server. |
+| Copilot / Claude event | Script              | What it does                            |
+|------------------------|---------------------|-----------------------------------------|
+| `sessionStart` / `SessionStart` | `notify.sh working` | Marks session live in the state server. |
 |                    |                         | If `source` is `compact` or `clear`,    |
 |                    |                         | also POSTs a histogram marker turn —    |
-|                    |                         | works for both manual `/compact /clear` |
-|                    |                         | and auto-compaction.                    |
-| `SessionStart`     | `tint_terminal.sh`      | GET /sessions to read this session's    |
+|                    |                         | used by Claude; Copilot derives compact |
+|                    |                         | markers from transcript events.         |
+| `sessionStart` / `SessionStart` | `tint_terminal.sh` | GET /sessions to read this session's |
 |                    |                         | leased `color_idx`, then OSC 4;264 to   |
 |                    |                         | `/dev/tty` so the Windows Terminal tab  |
 |                    |                         | indicator matches the LED tile color    |
-| `UserPromptSubmit` | `notify.sh pending`     | Sets pending=true → loading-bar anim    |
-| `Stop`             | `notify.sh stopped`     | Tails the transcript, groups assistant  |
-|                    |                         | API calls by preceding real user prompt,|
-|                    |                         | sums tokens + added/removed per group,  |
+| `userPromptSubmitted` / `UserPromptSubmit` | `notify.sh pending` | Sets pending=true → loading-bar anim |
+| `agentStop` / `Stop` | `notify.sh stopped` | Reads the transcript, groups events by  |
+|                    |                         | preceding real user prompt, computes    |
+|                    |                         | context + added/removed per group,      |
 |                    |                         | POSTs last 16 user-turns; clears pending|
-| `SessionEnd`       | `notify.sh closed`      | Removes the session from the board      |
+| `sessionEnd` / `SessionEnd` | `notify.sh closed` | Removes the session from the board  |
 | `Notification`     | `notify.sh awaiting`    | Permission-blink feature. No-op while   |
 |                    |                         | `BLINK_ON_PERMISSIONS=False` (current). |
 | `PreToolUse`       | `notify.sh tool-start`  | Permission-blink feature. No-op while   |
@@ -303,7 +329,7 @@ color change).
 
 Two hosts, two installs.
 
-### Cloud dev box (Claude Code + hooks only)
+### Cloud dev box (Copilot CLI or Claude Code + hooks only)
 
 ```bash
 # Hooks need jq + curl
@@ -312,12 +338,16 @@ jq --version && curl --version | head -1
 # Make hooks executable
 chmod +x hooks/notify.sh hooks/tint_terminal.sh
 
-# Edit ~/.claude/settings.json — see hooks/settings.json.example for the shape.
-# Set CLAUDE_LED_HOST to the laptop's Tailscale IP (e.g. 100.x.y.z).
+# Copilot CLI: copy hooks/copilot-hooks.json.example to
+# ~/.copilot/hooks/airgb.json, then replace the absolute paths and host.
+#
+# Claude Code: edit ~/.claude/settings.json using
+# hooks/settings.json.example, then replace the absolute paths and host.
 ```
 
-Reload settings via `/hooks` (or restart `claude`) so the hooks pick up.
-Hooks POST to `CLAUDE_LED_HOST:5000` over Tailscale.
+Restart Copilot CLI after changing its hook file. For Claude Code, reload
+settings via `/hooks` or restart `claude`. Hooks POST to
+`CLAUDE_LED_HOST:5000` over Tailscale.
 
 ### Home laptop (state server)
 
@@ -608,14 +638,15 @@ Risks worth knowing before flashing:
 | `hooks/notify.sh`             | Posts session state + last-16-turn usage |
 | `hooks/tint_terminal.sh`      | OSC 4 tab tint                           |
 | `hooks/settings.json.example` | Template for `~/.claude/settings.json`   |
+| `hooks/copilot-hooks.json.example` | Template for `~/.copilot/hooks/airgb.json` |
 | `MIGRATION.md`                | Phased migration plan: Pi → laptop + S3  |
-| `skills/<name>/SKILL.md`      | Claude Code skill definitions (see below)|
+| `skills/<name>/SKILL.md`      | Copilot/Claude skill definitions (see below)|
 
 
 ## Skills
 
-User-invokable skills live under `skills/<name>/SKILL.md`. Install one by
-symlinking it into `~/.claude/skills/`:
+User-invokable skills live under `skills/<name>/SKILL.md`. Install them by
+symlinking into `~/.copilot/skills/` or `~/.claude/skills/`:
 
 ```bash
 ln -snf ~/r/nonrepo/standalone/airgbmatrix/skills/airgb-color \
@@ -626,11 +657,14 @@ ln -snf ~/r/nonrepo/standalone/airgbmatrix/skills/airgb-status \
         ~/.claude/skills/airgb-status
 ```
 
+For Copilot CLI, use the same commands with `~/.copilot/skills` as the
+destination.
+
 Available:
 
 - **`/airgb-color <color>`** — set the current session's tile + tab
   to one of `orange yellow cyan purple blue green magenta red`. If the
-  color is in use, the holder is rotated to a free idx; Claude prints a
+  color is in use, the holder is rotated to a free idx; the agent prints a
   one-line command to paste in that bumped tab to resync its tint.
 - **`/airgb-clear <color>`** — drop whichever session is currently
   using that color from the board. Same effect as that session firing
@@ -789,4 +823,3 @@ Filed for later consideration; not on the active roadmap.
   signal, or repurpose as a generic "tool in progress" indicator
   (semantics shift but visual works). Search the repo for
   `BLINK_ON_PERMISSIONS` to find every gated block for surgical removal.
-

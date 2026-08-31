@@ -23,6 +23,14 @@ POLL_INTERVAL_S = 0.5
 DEBUG_ROW = MATRIX_H // 2 + 2
 
 
+def _latest_tokens(turns: list[dict]) -> int:
+    positive = [t for t in turns if (t.get("tokens", 0) or 0) > 0]
+    if not positive:
+        return 0
+    latest = max(positive, key=lambda t: (t.get("ts_epoch", 0), t.get("ts", "")))
+    return latest.get("tokens", 0) or 0
+
+
 class Buffer:
     def __init__(self, w: int, h: int) -> None:
         self.w, self.h = w, h
@@ -70,7 +78,7 @@ def _paint_debug(sessions: list[dict], now_epoch: int, fetch_ok: bool) -> None:
             "state": s.get("state"),
             "pending": bool(s.get("pending")),
             "turns": len(turns),
-            "tokens": sum(t.get("tokens", 0) for t in turns),
+            "context_tokens": _latest_tokens(turns),
             "added": sum(t.get("added", 0) or 0 for t in turns),
             "removed": sum(t.get("removed", 0) or 0 for t in turns),
             "age_s": age_s,
