@@ -49,9 +49,20 @@ from the parent session's turn and token histograms.
 Copilot persists `events.jsonl` records with `{type,data,id,timestamp,parentId}`.
 airgbmatrix groups records by `user.message`.
 
-`assistant.usage` is ephemeral and is not available to an `agentStop` hook.
-The per-turn token-use bar therefore uses a proxy built only from persisted
-model-visible content within that user turn:
+When Agency's `${COPILOT_HOME:-~/.copilot}/session-store.db` is available,
+airgbmatrix reads `assistant_usage_events` and sums the parent agent's exact
+cache-excluded usage for each turn:
+
+```text
+max(input_tokens - cache_read_tokens, 0) + output_tokens
+```
+
+Rows with `parent_tool_call_id` are subagent calls and are excluded. Exact
+turns carry `token_source: "copilot-usage"`.
+
+Without the session store, `assistant.usage` is ephemeral and unavailable to
+an `agentStop` hook. The portable fallback therefore uses a proxy built only
+from persisted model-visible content within that user turn:
 
 - transformed user prompt content
 - assistant content, reasoning text, and tool requests
@@ -60,6 +71,7 @@ model-visible content within that user turn:
 It intentionally excludes event envelopes, telemetry, hook events, and
 `result.detailedContent`. A successful `session.compaction_complete` creates a
 compact marker without redefining the surrounding turn's token volume.
+Fallback turns carry `token_source: "content-proxy"`.
 
 Code deltas require correlating `tool.execution_start` and
 `tool.execution_complete` by `toolCallId`; completion events do not carry the

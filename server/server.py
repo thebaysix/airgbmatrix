@@ -54,6 +54,10 @@ def _nonneg_int(v) -> int:
     return v if isinstance(v, int) and v >= 0 else 0
 
 
+def _token_source_rank(v) -> int:
+    return 1 if v in {"copilot-usage", "claude-usage"} else 0
+
+
 def _assign_color_indices(sessions: dict) -> None:
     # Lease lowest-free palette index 0..PALETTE_SIZE-1 to each session that
     # lacks a valid one. Existing valid leases are preserved. With MAX_SLOTS ==
@@ -215,17 +219,34 @@ def upsert_session():
                 merge_metrics = new_metrics_version == prev_metrics_version
                 incoming_added = _nonneg_int(t.get("added"))
                 incoming_removed = _nonneg_int(t.get("removed"))
+                incoming_token_source = t.get("token_source")
+                if not isinstance(incoming_token_source, str):
+                    incoming_token_source = ""
                 if replace_metrics:
                     merged_tokens = tok
                     merged_added = incoming_added
                     merged_removed = incoming_removed
                     merged_added_any = bool(t.get("added_any"))
                     merged_removed_any = bool(t.get("removed_any"))
+                    merged_token_source = incoming_token_source
                 elif merge_metrics:
-                    merged_tokens = max(
-                        prev_turn.get("tokens", 0),
-                        tok if isinstance(tok, int) else 0,
-                    )
+                    previous_token_source = prev_turn.get("token_source", "")
+                    previous_source_rank = _token_source_rank(previous_token_source)
+                    incoming_source_rank = _token_source_rank(incoming_token_source)
+                    if incoming_source_rank > previous_source_rank:
+                        merged_tokens = tok
+                        merged_token_source = incoming_token_source
+                    elif incoming_source_rank < previous_source_rank:
+                        merged_tokens = prev_turn.get("tokens", 0)
+                        merged_token_source = previous_token_source
+                    else:
+                        merged_tokens = max(
+                            prev_turn.get("tokens", 0),
+                            tok if isinstance(tok, int) else 0,
+                        )
+                        merged_token_source = (
+                            incoming_token_source or previous_token_source
+                        )
                     merged_added = max(prev_turn.get("added") or 0, incoming_added)
                     merged_removed = max(prev_turn.get("removed") or 0, incoming_removed)
                     merged_added_any = (
@@ -240,11 +261,13 @@ def upsert_session():
                     merged_removed = prev_turn.get("removed") or 0
                     merged_added_any = bool(prev_turn.get("added_any"))
                     merged_removed_any = bool(prev_turn.get("removed_any"))
+                    merged_token_source = prev_turn.get("token_source", "")
                 by_id[mid] = {
                     "msg_id": mid,
                     "kind": kind,
                     "metrics_version": max(prev_metrics_version, new_metrics_version),
                     "tokens": merged_tokens,
+                    "token_source": merged_token_source,
                     "ts": ts if new_ts_epoch >= old_ts_epoch else prev_turn.get("ts", ts),
                     "ts_epoch": max(old_ts_epoch, new_ts_epoch),
                     "added": merged_added,

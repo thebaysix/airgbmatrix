@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -67,13 +68,45 @@ class HookTests(unittest.TestCase):
             )
             return json.loads(capture.read_text()) if capture.exists() else None
 
-    def run_notify(self, transcript_lines, hook_input=None, transcript_sid=None):
+    def run_notify(
+        self,
+        transcript_lines,
+        hook_input=None,
+        transcript_sid=None,
+        exact_usage_rows=(),
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             transcript_dir = tmp_path
             if transcript_sid:
-                transcript_dir = tmp_path / transcript_sid
-                transcript_dir.mkdir()
+                copilot_home = tmp_path / "copilot-home"
+                transcript_dir = copilot_home / "session-state" / transcript_sid
+                transcript_dir.mkdir(parents=True)
+                if exact_usage_rows:
+                    connection = sqlite3.connect(copilot_home / "session-store.db")
+                    connection.execute(
+                        """
+                        CREATE TABLE assistant_usage_events (
+                            session_id TEXT,
+                            turn_index INTEGER,
+                            parent_tool_call_id TEXT,
+                            input_tokens INTEGER,
+                            output_tokens INTEGER,
+                            cache_read_tokens INTEGER
+                        )
+                        """
+                    )
+                    connection.executemany(
+                        """
+                        INSERT INTO assistant_usage_events
+                            (session_id, turn_index, parent_tool_call_id,
+                             input_tokens, output_tokens, cache_read_tokens)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        exact_usage_rows,
+                    )
+                    connection.commit()
+                    connection.close()
             transcript = transcript_dir / "events.jsonl"
             transcript.write_text(
                 "".join(json.dumps(line) + "\n" for line in transcript_lines)
@@ -252,7 +285,53 @@ class HookTests(unittest.TestCase):
         self.assertEqual([turn["msg_id"] for turn in turns], ["parent-1", "parent-2"])
         self.assertEqual([turn["tokens"] for turn in turns], [13, 13])
         self.assertEqual(turns[1]["ts"], "2026-01-01T00:00:06Z")
-        self.assertTrue(all(turn["metrics_version"] == 4 for turn in turns))
+        self.assertTrue(all(turn["metrics_version"] == 5 for turn in turns))
+        self.assertTrue(all(turn["token_source"] == "content-proxy" for turn in turns))
+
+    def test_copilot_prefers_exact_cache_excluded_parent_usage(self):
+        parent_sid = "bc1720c4-c553-4ade-895d-4e63df56a8fd"
+        lines = [
+            event(
+                "user.message",
+                "parent-1",
+                "2026-01-01T00:00:00Z",
+                {"content": "first", "interactionId": "parent-1"},
+            ),
+            event(
+                "assistant.message",
+                "answer-1",
+                "2026-01-01T00:00:01Z",
+                {"content": "x" * 400, "interactionId": "parent-1"},
+            ),
+            event(
+                "user.message",
+                "parent-2",
+                "2026-01-01T00:00:02Z",
+                {"content": "second", "interactionId": "parent-2"},
+            ),
+            event(
+                "assistant.message",
+                "answer-2",
+                "2026-01-01T00:00:03Z",
+                {"content": "y" * 400, "interactionId": "parent-2"},
+            ),
+        ]
+        exact_usage_rows = [
+            (parent_sid, 0, None, 100, 10, 70),
+            (parent_sid, 0, "subagent-task", 10_000, 1_000, 0),
+            (parent_sid, 1, None, 200, 20, 150),
+        ]
+
+        turns = self.run_notify(
+            lines,
+            {"sessionId": parent_sid},
+            transcript_sid=parent_sid,
+            exact_usage_rows=exact_usage_rows,
+        )["turns"]
+
+        self.assertEqual([turn["tokens"] for turn in turns], [40, 70])
+        self.assertTrue(all(turn["metrics_version"] == 5 for turn in turns))
+        self.assertTrue(all(turn["token_source"] == "copilot-usage" for turn in turns))
 
     def test_copilot_counts_only_successful_file_mutation_diffs(self):
         lines = [
@@ -416,7 +495,7 @@ class HookTests(unittest.TestCase):
         self.assertEqual((turns[1]["added"], turns[1]["removed"]), (0, 0))
         self.assertFalse(turns[1]["added_any"])
         self.assertFalse(turns[1]["removed_any"])
-        self.assertTrue(all(turn["metrics_version"] == 4 for turn in turns))
+        self.assertTrue(all(turn["metrics_version"] == 5 for turn in turns))
 
     def test_copilot_compaction_adds_marker_without_resetting_turn_volume(self):
         lines = [
@@ -493,7 +572,8 @@ class HookTests(unittest.TestCase):
             },
         )["turns"][0]
         self.assertEqual(turn["tokens"], 13)
-        self.assertEqual(turn["metrics_version"], 4)
+        self.assertEqual(turn["metrics_version"], 5)
+        self.assertEqual(turn["token_source"], "claude-usage")
 
     def test_tint_accepts_copilot_camel_case_session_id(self):
         with tempfile.TemporaryDirectory() as tmp:

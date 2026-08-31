@@ -124,16 +124,26 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
   fi
 
   # --- GitHub Copilot transcript (events.jsonl): {type,data,id,timestamp,parentId}.
-  #     assistant.usage events are ephemeral, so per-turn token use is estimated
-  #     from persisted model-visible content.
+  #     Prefer exact cache-excluded usage from Copilot's session-store.db.
+  #     Plain Copilot installations without that store fall back to estimated
+  #     model-visible content volume.
   #
   #     detailedContent is NOT inherently a code diff: read tools render file
   #     contents as synthetic diffs and shell output is arbitrary text. Correlate
   #     completions to tool.execution_start by toolCallId and count hunk lines
   #     only for Copilot's built-in file-mutating tools.
   #
-  #     One turn record per user.message; last 16 turns. ---
-  TURNS_JSON=$(jq -s -c '
+  #     One turn record per parent user.message; last 16 turns. ---
+  COPILOT_CONFIG_DIR=$(dirname "$(dirname "$(dirname "$TRANSCRIPT")")")
+  EXACT_USAGE_JSON=$(
+    python3 "$SCRIPT_DIR/copilot_usage.py" \
+      "$COPILOT_CONFIG_DIR/session-store.db" "$SID" 2>/dev/null
+  ) || EXACT_USAGE_JSON="{}"
+  if ! printf '%s' "$EXACT_USAGE_JSON" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    EXACT_USAGE_JSON="{}"
+  fi
+
+  TURNS_JSON=$(jq -s -c --argjson exact "$EXACT_USAGE_JSON" '
     def textlen:
       if . == null then 0
       elif type == "string" then length
@@ -165,7 +175,8 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
          else . end)
         | {a,r} end;
     reduce .[] as $e ({
-      groups:[], cur:null, tools:{}, aux_interactions:{}, aux_events:{}
+      groups:[], cur:null, tools:{}, aux_interactions:{}, aux_events:{},
+      turn_index:-1
     };
       ($e.type) as $t
       | ($e.data.interactionId // "") as $interaction
@@ -182,11 +193,12 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
              else .aux_events[$e.id] = true end)
         elif $t == "user.message" then
           (if .cur != null then .groups += [.cur] else . end)
+          | .turn_index += 1
           | .cur = {
               msg_id:($e.id // ($e.timestamp+"_u")),
               kind:"turn",
               ts:$e.timestamp,
-              metrics_version:4,
+              turn_index:.turn_index,
               chars:($e | turn_chars),
               tokens:([1, ((($e | turn_chars)/4)|floor)] | max),
               added:0,
@@ -202,7 +214,7 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
                msg_id:("orphan_"+($e.timestamp//"0")),
                kind:"turn",
                ts:$e.timestamp,
-               metrics_version:4,
+               turn_index:null,
                chars:0,
                tokens:1,
                added:0,
@@ -227,7 +239,6 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
           .groups += [{
             msg_id:("copilot:"+$e.id),
             kind:"compact",
-            metrics_version:4,
             tokens:0,
             ts:$e.timestamp,
             added:0,
@@ -244,7 +255,23 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
         else . end)
     | (if .cur != null then .groups + [.cur] else .groups end)
     | .[(-16):]
-    | map({msg_id,kind,metrics_version,tokens,ts,added,removed,added_any,removed_any})
+    | map(
+        if .kind == "turn"
+           and (($exact[(.turn_index | tostring)] // 0) | type) == "number"
+           and ($exact[(.turn_index | tostring)] // 0) > 0 then
+          .tokens = $exact[(.turn_index | tostring)]
+          | .metrics_version = 5
+          | .token_source = "copilot-usage"
+        elif .kind == "turn" then
+          .metrics_version = 5
+          | .token_source = "content-proxy"
+        else
+          .metrics_version = 5
+          | .token_source = "marker"
+        end
+        | {msg_id,kind,metrics_version,token_source,tokens,ts,
+           added,removed,added_any,removed_any}
+      )
   ' "$TRANSCRIPT" 2>/dev/null) || TURNS_JSON="[]"
  else
   # One turn record per *user-prompt* (not per assistant API call). Walk the
@@ -374,7 +401,8 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
     | map({
         msg_id: .msg_id,
         kind: .kind,
-        metrics_version: 4,
+        metrics_version: 5,
+        token_source: "claude-usage",
         tokens: .tokens,
         ts: .ts,
         added: .added,

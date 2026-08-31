@@ -53,6 +53,7 @@ class ServerMergeTests(unittest.TestCase):
                 "removed": 0,
                 "added_any": False,
                 "removed_any": False,
+                "token_source": "copilot-usage",
             }
         )
         self.assertEqual(corrected["metrics_version"], 2)
@@ -60,6 +61,7 @@ class ServerMergeTests(unittest.TestCase):
         self.assertEqual((corrected["added"], corrected["removed"]), (0, 0))
         self.assertFalse(corrected["added_any"])
         self.assertFalse(corrected["removed_any"])
+        self.assertEqual(corrected["token_source"], "copilot-usage")
 
     def test_older_metrics_version_cannot_reinflate_corrected_counts(self):
         self.post_turn(
@@ -183,6 +185,62 @@ class ServerMergeTests(unittest.TestCase):
         turns = server._sessions["session-1"]["turns"]
         self.assertEqual([turn["msg_id"] for turn in turns], ["real-turn"])
         self.assertEqual(turns[0]["tokens"], 70)
+
+    def test_exact_turn_survives_fallback_while_new_proxy_turn_is_accepted(self):
+        exact_response = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "stopped",
+                "turns": [
+                    {
+                        "msg_id": "exact-turn",
+                        "metrics_version": 5,
+                        "token_source": "copilot-usage",
+                        "tokens": 40,
+                        "ts": "2026-01-01T00:00:00Z",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(exact_response.status_code, 200)
+
+        fallback_response = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "stopped",
+                "turns": [
+                    {
+                        "msg_id": "exact-turn",
+                        "metrics_version": 5,
+                        "token_source": "content-proxy",
+                        "tokens": 400,
+                        "ts": "2026-01-01T00:00:01Z",
+                    },
+                    {
+                        "msg_id": "new-proxy-turn",
+                        "metrics_version": 5,
+                        "token_source": "content-proxy",
+                        "tokens": 20,
+                        "ts": "2026-01-01T00:00:02Z",
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(fallback_response.status_code, 200)
+        turns = {
+            turn["msg_id"]: turn
+            for turn in server._sessions["session-1"]["turns"]
+        }
+        self.assertEqual(turns["exact-turn"]["tokens"], 40)
+        self.assertEqual(turns["exact-turn"]["token_source"], "copilot-usage")
+        self.assertEqual(turns["new-proxy-turn"]["tokens"], 20)
+        self.assertEqual(
+            turns["new-proxy-turn"]["token_source"],
+            "content-proxy",
+        )
 
 
 if __name__ == "__main__":

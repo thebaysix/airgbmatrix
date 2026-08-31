@@ -230,14 +230,21 @@ The white bar is relative token use within that user turn:
   cache_creation_input_tokens` across distinct assistant API calls in the
   user-turn. `cache_read_input_tokens` remains excluded so repeatedly reading
   a large cached prefix does not dominate the activity signal.
-- **Copilot CLI:** persisted `assistant.usage` events are ephemeral, so
-  `notify.sh` estimates per-turn volume from the transformed prompt plus
-  assistant, tool-request, and model-visible tool-result content at roughly
-  four characters per token. It excludes hook bookkeeping, telemetry, and
-  UI-only `detailedContent`. A successful `session.compaction_complete` emits
-  the compact marker but does not change the surrounding turn's token count.
-  Shared-transcript subagent streams are excluded; only the result returned to
-  the parent contributes to the parent's turn.
+- **Copilot CLI with Agency session storage:** read exact parent-agent usage
+  from `session-store.db` and sum
+  `max(input_tokens - cache_read_tokens, 0) + output_tokens` across the turn's
+  API calls. Subagent calls (`parent_tool_call_id != null`) are excluded; only
+  the result returned to the parent contributes when the parent consumes it.
+- **Plain Copilot CLI fallback:** persisted `assistant.usage` events are
+  ephemeral, so `notify.sh` estimates per-turn volume from the transformed
+  prompt plus assistant, tool-request, and model-visible tool-result content
+  at roughly four characters per token. Turns report `token_source:
+  "content-proxy"` instead of `"copilot-usage"` so consumers can distinguish
+  the estimate. Hook bookkeeping, telemetry, UI-only `detailedContent`, and
+  shared-transcript subagent streams are excluded.
+
+A successful Copilot `session.compaction_complete` emits the compact marker
+but does not change the surrounding turn's token count.
 
 White heights are intentionally relative rather than linear: the renderer
 square-root scales each visible turn against the largest turn that actually
@@ -356,7 +363,7 @@ Two hosts, two installs.
 jq --version && curl --version | head -1
 
 # Make hooks executable
-chmod +x hooks/notify.sh hooks/tint_terminal.sh
+chmod +x hooks/notify.sh hooks/tint_terminal.sh hooks/copilot_usage.py
 
 # Copilot CLI: copy hooks/copilot-hooks.json.example to
 # ~/.copilot/hooks/airgb.json, then replace the absolute paths and host.
