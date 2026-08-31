@@ -23,6 +23,9 @@ Claude Code continues to load `~/.claude/settings.json`; start from
 
 Copilot's native hook payload uses `sessionId` and `transcriptPath`; Claude's
 uses `session_id` and `transcript_path`. Both accessors are accepted.
+Auxiliary Copilot agents can report a transient `sessionId` while sharing the
+parent transcript; for stopped events, the UUID containing `events.jsonl` is
+the canonical board identity.
 
 ## Transcript contracts
 

@@ -279,6 +279,11 @@ tools are not included because their result payloads do not provide a
 reliable before/after diff. Missing activity is preferable to inventing
 green/red bars from arbitrary command output.
 
+Copilot auxiliary agents may fire `agentStop` with a transient session ID
+while referencing the parent session's `events.jsonl`. For stopped events,
+airgbmatrix treats the transcript directory UUID as canonical so an auxiliary
+completion updates the parent tile instead of creating a duplicate session.
+
 
 ## Hooks
 

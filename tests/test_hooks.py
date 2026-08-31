@@ -22,10 +22,14 @@ def event(event_type, event_id, timestamp, data):
 
 
 class HookTests(unittest.TestCase):
-    def run_notify(self, transcript_lines, hook_input=None):
+    def run_notify(self, transcript_lines, hook_input=None, transcript_sid=None):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            transcript = tmp_path / "events.jsonl"
+            transcript_dir = tmp_path
+            if transcript_sid:
+                transcript_dir = tmp_path / transcript_sid
+                transcript_dir.mkdir()
+            transcript = transcript_dir / "events.jsonl"
             transcript.write_text(
                 "".join(json.dumps(line) + "\n" for line in transcript_lines)
             )
@@ -63,6 +67,24 @@ class HookTests(unittest.TestCase):
                 capture_output=True,
             )
             return json.loads(capture.read_text())
+
+    def test_copilot_auxiliary_stop_uses_parent_transcript_session_id(self):
+        parent_sid = "bc1720c4-c553-4ade-895d-4e63df56a8fd"
+        lines = [
+            event(
+                "user.message",
+                "user-1",
+                "2026-01-01T00:00:00Z",
+                {"content": "prompt", "transformedContent": "prompt"},
+            )
+        ]
+
+        payload = self.run_notify(
+            lines,
+            {"sessionId": "550d1419-7e34-4889-9ad2-cc2f8d0ef98a"},
+            transcript_sid=parent_sid,
+        )
+        self.assertEqual(payload["id"], parent_sid)
 
     def test_copilot_counts_only_successful_file_mutation_diffs(self):
         lines = [

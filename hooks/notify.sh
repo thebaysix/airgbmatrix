@@ -89,6 +89,15 @@ fi
 TURNS_JSON="[]"
 if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
  if head -1 "$TRANSCRIPT" 2>/dev/null | jq -e 'has("parentId")' >/dev/null 2>&1; then
+  # Copilot auxiliary agents can emit agentStop with their own transient
+  # sessionId while pointing at the parent session's events.jsonl. The
+  # transcript directory is the durable session identity; using the auxiliary
+  # id would create a phantom board tile containing the parent's turns.
+  TRANSCRIPT_SID=$(basename "$(dirname "$TRANSCRIPT")")
+  if [[ "$TRANSCRIPT_SID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    SID="$TRANSCRIPT_SID"
+  fi
+
   # --- GitHub Copilot transcript (events.jsonl): {type,data,id,timestamp,parentId}.
   #     assistant.usage events are ephemeral, so context size is estimated from
   #     persisted model-visible content. Compaction events provide an exact
