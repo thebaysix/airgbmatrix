@@ -38,27 +38,23 @@ Per session, compute:
 | color   | name from `color_idx` (table below)                              |
 | state   | `state` (working / stopped) — `pending=true` adds a `*` marker   |
 | turns   | `len(turns)`, but render `≥16` when it equals 16 (see note)      |
-| context | latest turn's `tokens` — abbreviate as `12k` / `1.2M`           |
+| tokens  | `sum(t.tokens)` — abbreviate as `12k` / `1.2M`                 |
 | +/-     | `sum(t.added)` / `sum(t.removed)` — show `0` for plain `0/0`     |
 | age     | now − `updated_at`, abbreviated as `42s` / `5m` / `2h` / `1d`    |
 
-**Important — what the numbers actually mean (don't sum tokens):**
+**Important — what the numbers actually mean:**
 
-- **`context` is current window size, not work volume.** Each turn's
-  `tokens` field is the *context-window size at that turn* (max-merged across
-  transcript-flush re-POSTs server-side), NOT incremental tokens spent.
-  Summing them double-counts wildly and is meaningless. Report the **latest**
-  turn's `tokens` — i.e. the turn with the greatest `ts_epoch` and a positive
-  `tokens` value (skip `compact`/`clear` markers, which carry `0`). That's
-  "how big is this session's context right now." It can drop sharply after a
-  compaction — that's expected, not a bug.
+- **`tokens` is recent work volume.** Each turn's `tokens` field represents
+  relative token use for that user turn. Sum the retained turns for an
+  at-a-glance recent total. Claude Code supplies API usage; Copilot CLI uses a
+  model-visible-content proxy because usage events are not persisted.
 - **`turns` is capped, not a lifetime count.** The server keeps only the last
   **16** turns per session (`MAX_TURNS`), so `len(turns)` means "≥16" once it
   hits the cap. Render it as `≥16` (not a bare `16`) in that case so it isn't
   read as an exact total.
-- **`+/-` is over the last 16 turns only**, for the same capping reason. It's
-  recent code-change activity, not the session's lifetime diff. Note this in a
-  one-line footer under the table so it isn't mistaken for a full total.
+- **`tokens` and `+/-` are over the last 16 turns only**, for the same capping
+  reason. They are recent activity, not lifetime totals. Note this in a one-line
+  footer under the table.
 
 Color index → name:
 
@@ -78,13 +74,13 @@ and parse the hex.
 A reasonable layout:
 
 ```
-slot  id        color           state    turns  context  code        age
+slot  id        color           state    turns  tokens   code        age
 ----  --------  --------------  -------  -----  -------  ----------  -----
   0   ed37888a  ████ red        working*   ≥16     857k  +334/-245   42s
   1   d4614dd8  ████ blue       stopped     12     185k  +90/-59     5m
   ...
 
-context = current window size · turns ≥16 = capped · +/- = last 16 turns
+turns ≥16 = capped · tokens/+/- = last 16 turns
 ```
 
 (The `████` block uses the actual ANSI background-color escape so the

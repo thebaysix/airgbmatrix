@@ -2,7 +2,7 @@
 
 An ambient 32×32 RGB LED panel that shows what your Copilot CLI and Claude
 Code sessions are doing — one tile per session, colored by session GUID, with
-a live context + code-change histogram of the most recent turns (12 columns
+a live token-use + code-change histogram of the most recent turns (12 columns
 wide; a turn that edited files takes 2 columns, so roughly 6–12 turns of
 history per session).
 
@@ -22,7 +22,7 @@ history per session).
   `server/renderer.py` and `s3/render_frame.py` (default 4); the histogram
   takes whatever's left.
 - **Histogram** (right) — `HIST_W` columns × 8 rows (default 12). Each turn
-  produces a white **context bar** (sqrt-scaled across all sessions); turns
+  produces a white **token-use bar** (sqrt-scaled across all sessions); turns
   that touched code through a recognized file-mutation tool also produce a
   stacked **code bar** in the next column — both colors anchored at the bottom of the
   column, green block first, red block stacked on top of green. Each color
@@ -224,19 +224,18 @@ Copilot CLI loads `~/.copilot/hooks/*.json` (see
 
 ## Token + code model
 
-The white bar is current context-window size at that turn, not cumulative work:
+The white bar is relative token use within that user turn:
 
-- **Claude Code:** for each assistant API call, context is
-  `input_tokens + output_tokens + cache_creation_input_tokens +
-  cache_read_input_tokens`; a user-turn keeps the largest call rather than
-  summing tool-loop calls.
+- **Claude Code:** sum `input_tokens + output_tokens +
+  cache_creation_input_tokens` across distinct assistant API calls in the
+  user-turn. `cache_read_input_tokens` remains excluded so repeatedly reading
+  a large cached prefix does not dominate the activity signal.
 - **Copilot CLI:** persisted `assistant.usage` events are ephemeral, so
-  `notify.sh` estimates context from cumulative model-visible system, prompt,
-  assistant, tool-request, and tool-result content at roughly four characters
-  per token. It excludes hook bookkeeping, telemetry, and UI-only
-  `detailedContent`. A successful `session.compaction_complete` event resets
-  the estimate to Copilot's exact `postCompactionTokens` and emits the compact
-  marker.
+  `notify.sh` estimates per-turn volume from the transformed prompt plus
+  assistant, tool-request, and model-visible tool-result content at roughly
+  four characters per token. It excludes hook bookkeeping, telemetry, and
+  UI-only `detailedContent`. A successful `session.compaction_complete` emits
+  the compact marker but does not change the surrounding turn's token count.
 
 Claude Code change counts sum `added` / `removed` across all
 Edit/Write/MultiEdit `tool_use` blocks in a user-turn, computed with
@@ -301,7 +300,7 @@ completion updates the parent tile instead of creating a duplicate session.
 | `userPromptSubmitted` / `UserPromptSubmit` | `notify.sh pending` | Sets pending=true → loading-bar anim |
 | `agentStop` / `Stop` | `notify.sh stopped` | Reads the transcript, groups events by  |
 |                    |                         | preceding real user prompt, computes    |
-|                    |                         | context + added/removed per group,      |
+|                    |                         | token use + added/removed per group,    |
 |                    |                         | POSTs last 16 user-turns; clears pending|
 | `sessionEnd` / `SessionEnd` | `notify.sh closed` | Removes the session from the board  |
 | `Notification`     | `notify.sh awaiting`    | Permission-blink feature. No-op while   |

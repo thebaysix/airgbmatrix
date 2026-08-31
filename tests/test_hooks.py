@@ -248,9 +248,9 @@ class HookTests(unittest.TestCase):
         self.assertEqual((turns[1]["added"], turns[1]["removed"]), (0, 0))
         self.assertFalse(turns[1]["added_any"])
         self.assertFalse(turns[1]["removed_any"])
-        self.assertTrue(all(turn["metrics_version"] == 2 for turn in turns))
+        self.assertTrue(all(turn["metrics_version"] == 3 for turn in turns))
 
-    def test_copilot_uses_exact_post_compaction_context_and_adds_marker(self):
+    def test_copilot_compaction_adds_marker_without_resetting_turn_volume(self):
         lines = [
             event("system.message", "sys", "2026-01-01T00:00:00Z", {"content": "x" * 400}),
             event(
@@ -277,9 +277,9 @@ class HookTests(unittest.TestCase):
         self.assertEqual(turns[0]["kind"], "compact")
         self.assertEqual(turns[0]["msg_id"], "copilot:compact-1")
         self.assertEqual(turns[1]["msg_id"], "user-1")
-        self.assertEqual(turns[1]["tokens"], 1334)
+        self.assertEqual(turns[1]["tokens"], 101)
 
-    def test_claude_context_includes_cache_reads(self):
+    def test_claude_sums_api_calls_and_excludes_cache_reads(self):
         lines = [
             {
                 "type": "user",
@@ -324,8 +324,8 @@ class HookTests(unittest.TestCase):
                 "transcript_path": "",
             },
         )["turns"][0]
-        self.assertEqual(turn["tokens"], 12)
-        self.assertEqual(turn["metrics_version"], 2)
+        self.assertEqual(turn["tokens"], 13)
+        self.assertEqual(turn["metrics_version"], 3)
 
     def test_tint_accepts_copilot_camel_case_session_id(self):
         with tempfile.TemporaryDirectory() as tmp:

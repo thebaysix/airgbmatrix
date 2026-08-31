@@ -13,9 +13,9 @@
 # repeated POSTs are idempotent — robust against Stop firing before the latest
 # transcript line has been flushed.
 #
-# tokens = current context-window size. Claude Code exposes exact usage fields;
-# Copilot CLI persists model-visible content but not assistant usage, so its
-# parser estimates tokens from text size and calibrates after compaction.
+# tokens = relative token use within one user turn. Claude Code exposes exact
+# usage fields; Copilot CLI persists model-visible content but not assistant
+# usage, so its parser estimates per-turn volume from text size.
 #
 # Configure target via CLAUDE_LED_HOST / CLAUDE_LED_PORT (defaults: localhost:5000).
 set -uo pipefail
@@ -99,9 +99,8 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
   fi
 
   # --- GitHub Copilot transcript (events.jsonl): {type,data,id,timestamp,parentId}.
-  #     assistant.usage events are ephemeral, so context size is estimated from
-  #     persisted model-visible content. Compaction events provide an exact
-  #     post-compaction token count that resets the estimate.
+  #     assistant.usage events are ephemeral, so per-turn token use is estimated
+  #     from persisted model-visible content.
   #
   #     detailedContent is NOT inherently a code diff: read tools render file
   #     contents as synthetic diffs and shell output is arbitrary text. Correlate
@@ -114,15 +113,14 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
       if . == null then 0
       elif type == "string" then length
       else (tojson | length) end;
-    def context_chars:
-      if .type == "system.message" then
-        (.data.content | textlen)
-      elif .type == "user.message" then
+    def turn_chars:
+      if .type == "user.message" then
         ((.data.transformedContent // .data.content) | textlen)
       elif .type == "assistant.message" then
         ((.data.content | textlen)
          + (.data.reasoningText | textlen)
-         + (.data.toolRequests | textlen))
+         + ((.data.toolRequests // [])
+            | if length == 0 then 0 else textlen end))
       elif .type == "tool.execution_complete" then
         (.data.result.content | textlen)
       else 0 end;
@@ -141,17 +139,17 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
               and (($line | startswith("---")) | not) then .r += 1
          else . end)
         | {a,r} end;
-    reduce .[] as $e ({groups:[], cur:null, chars:0, tools:{}};
+    reduce .[] as $e ({groups:[], cur:null, tools:{}};
       ($e.type) as $t
-      | (.chars += ($e | context_chars))
       | if $t == "user.message" then
           (if .cur != null then .groups += [.cur] else . end)
           | .cur = {
               msg_id:($e.id // ($e.timestamp+"_u")),
               kind:"turn",
               ts:$e.timestamp,
-              metrics_version:2,
-              tokens:([1, ((.chars/4)|floor)] | max),
+              metrics_version:3,
+              chars:($e | turn_chars),
+              tokens:([1, ((($e | turn_chars)/4)|floor)] | max),
               added:0,
               removed:0,
               added_any:false,
@@ -165,7 +163,8 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
                msg_id:("orphan_"+($e.timestamp//"0")),
                kind:"turn",
                ts:$e.timestamp,
-               metrics_version:2,
+               metrics_version:3,
+               chars:0,
                tokens:1,
                added:0,
                removed:0,
@@ -173,6 +172,7 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
                removed_any:false
              }
            else . end)
+          | .cur.chars += ($e | turn_chars)
           | (.tools[$e.data.toolCallId] // "") as $tool
           | (if ($e.data.success == true and ($tool | is_code_tool)) then
                (($e.data.result.detailedContent) | difflines) as $d
@@ -181,15 +181,14 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
                | .cur.added_any = (.cur.added_any or ($d.a > 0))
                | .cur.removed_any = (.cur.removed_any or ($d.r > 0))
              else . end)
-          | .cur.tokens = ([1, ((.chars/4)|floor)] | max)
+          | .cur.tokens = ([1, ((.cur.chars/4)|floor)] | max)
           | .cur.ts = $e.timestamp
         elif ($t == "session.compaction_complete"
-              and $e.data.success == true
-              and ($e.data.postCompactionTokens | type) == "number") then
+              and $e.data.success == true) then
           .groups += [{
             msg_id:("copilot:"+$e.id),
             kind:"compact",
-            metrics_version:2,
+            metrics_version:3,
             tokens:0,
             ts:$e.timestamp,
             added:0,
@@ -197,14 +196,10 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
             added_any:false,
             removed_any:false
           }]
-          | .chars = ($e.data.postCompactionTokens * 4)
-          | (if .cur != null then
-               .cur.tokens = $e.data.postCompactionTokens
-               | .cur.ts = $e.timestamp
-             else . end)
         elif ($t == "assistant.turn_end" or $t == "assistant.message") then
           (if .cur != null then
-             (.cur.tokens = ([1, ((.chars/4)|floor)] | max)
+             (.cur.chars += ($e | turn_chars)
+              | .cur.tokens = ([1, ((.cur.chars/4)|floor)] | max)
               | .cur.ts = $e.timestamp)
            else . end)
         else . end)
@@ -220,8 +215,8 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
   # they're really tool outputs, not new user prompts).
   #
   # Per-group aggregation: tokens summed across all assistant API calls in
-  # the group; context size uses the largest assistant API call while code
-  # deltas sum across every Edit/MultiEdit/Write in those calls. Edit semantics:
+  # the group; token use and code deltas sum across every assistant API call.
+  # Edit semantics:
   # replacing N lines with M counts as M added + N removed (git-diff style).
   # Write counts content as added; removed stays 0 since we don't see prior file
   # content from the tool_use.
@@ -283,8 +278,7 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
     def msg_tokens:
       ((.message.usage.input_tokens // 0)
        + (.message.usage.output_tokens // 0)
-       + (.message.usage.cache_creation_input_tokens // 0)
-       + (.message.usage.cache_read_input_tokens // 0));
+       + (.message.usage.cache_creation_input_tokens // 0));
     def is_real_user:
       if .type != "user" then false
       else (.message.content // null) as $c |
@@ -322,12 +316,11 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
         | $x.message.id as $mid
         # Dedup usage per msg_id (thinking + text + tool_use of one assistant
         # call appear as separate transcript lines with the same msg_id and
-        # same usage). Each API call reports its full context, so keep the
-        # largest rather than summing calls. Accumulate code_delta per line
-        # because tool_use can live on a different line than text.
+        # same usage). Sum distinct API calls and accumulate code_delta per
+        # line because tool_use can live on a different line than text.
         | (if (.cur.seen[$mid] // false) then .
            else .cur.seen[$mid] = true
-                | .cur.tokens = ([.cur.tokens, ($x | msg_tokens)] | max) end)
+                | .cur.tokens += ($x | msg_tokens) end)
         | ($x | code_delta) as $cd
         | .cur.added += $cd.added
         | .cur.removed += $cd.removed
@@ -342,7 +335,7 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
     | map({
         msg_id: .msg_id,
         kind: .kind,
-        metrics_version: 2,
+        metrics_version: 3,
         tokens: .tokens,
         ts: .ts,
         added: .added,

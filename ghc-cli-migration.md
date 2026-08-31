@@ -35,18 +35,16 @@ Copilot persists `events.jsonl` records with `{type,data,id,timestamp,parentId}`
 airgbmatrix groups records by `user.message`.
 
 `assistant.usage` is ephemeral and is not available to an `agentStop` hook.
-The context bar therefore uses a proxy built only from persisted model-visible
-content:
+The per-turn token-use bar therefore uses a proxy built only from persisted
+model-visible content within that user turn:
 
-- system message content
 - transformed user prompt content
 - assistant content, reasoning text, and tool requests
 - `tool.execution_complete.data.result.content`
 
 It intentionally excludes event envelopes, telemetry, hook events, and
-`result.detailedContent`. A successful `session.compaction_complete` resets
-the estimate to the exact `postCompactionTokens` value and creates a compact
-marker.
+`result.detailedContent`. A successful `session.compaction_complete` creates a
+compact marker without redefining the surrounding turn's token volume.
 
 Code deltas require correlating `tool.execution_start` and
 `tool.execution_complete` by `toolCallId`; completion events do not carry the
@@ -69,9 +67,10 @@ delta for them rather than inventing one from display text.
 ### Claude Code
 
 Claude transcripts contain `user` / `assistant` records. airgbmatrix groups
-assistant calls under the preceding real user prompt, keeps the largest
-reported context size in that group, and aggregates Edit/MultiEdit/Write code
-deltas. Context includes input, output, cache-creation, and cache-read tokens.
+assistant calls under the preceding real user prompt and sums distinct API
+calls plus Edit/MultiEdit/Write code deltas. Token use includes input, output,
+and cache-creation tokens; cache-read tokens remain excluded from the activity
+signal pending a deliberate product decision.
 
 Claude's `SessionStart.source` still supplies `/compact` and `/clear` markers.
 Copilot supplies compact markers through its persisted compaction-complete

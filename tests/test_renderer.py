@@ -1,6 +1,8 @@
+import io
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,13 +44,22 @@ class RendererTests(unittest.TestCase):
         self.assertNotIn(renderer.BAR_GREEN, histogram)
         self.assertNotIn(renderer.BAR_RED, histogram)
 
-    def test_debug_context_uses_latest_positive_turn_not_sum(self):
-        turns = [
-            {"tokens": 100, "ts_epoch": 1},
-            {"tokens": 0, "ts_epoch": 3, "kind": "compact"},
-            {"tokens": 40, "ts_epoch": 2},
-        ]
-        self.assertEqual(term_renderer._latest_tokens(turns), 40)
+    def test_debug_token_total_sums_recent_turns(self):
+        output = io.StringIO()
+        sessions = [{
+            "id": "session-id",
+            "updated_at": "1970-01-01T00:00:01+00:00",
+            "turns": [
+                {"tokens": 100, "ts_epoch": 1},
+                {"tokens": 0, "ts_epoch": 3, "kind": "compact"},
+                {"tokens": 40, "ts_epoch": 2},
+            ],
+        }]
+
+        with mock.patch.object(term_renderer.sys, "stdout", output):
+            term_renderer._paint_debug(sessions, now_epoch=10, fetch_ok=True)
+
+        self.assertIn('"tokens": 140', output.getvalue())
 
 
 if __name__ == "__main__":
