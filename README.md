@@ -321,7 +321,9 @@ parent's turn histogram.
 |                    |                         | If `source` is `compact` or `clear`,    |
 |                    |                         | also POSTs a histogram marker turn —    |
 |                    |                         | used by Claude; Copilot derives compact |
-|                    |                         | markers from transcript events.         |
+|                    |                         | markers from transcript events. A       |
+|                    |                         | Copilot start carrying `initialPrompt`  |
+|                    |                         | keeps the first turn pending.            |
 | `sessionStart` / `SessionStart` | `tint_terminal.sh` | GET /sessions to read this session's |
 |                    |                         | leased `color_idx`, then OSC 4;264 to   |
 |                    |                         | `/dev/tty` so the Windows Terminal tab  |

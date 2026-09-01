@@ -5,7 +5,9 @@
 #
 # `pending` is the UserPromptSubmit signal: keeps state as working but sets
 # pending=true so the renderer paints an animated loading bar. Stop and
-# SessionStart/End set pending=false explicitly.
+# SessionEnd set pending=false explicitly. Copilot's first userPromptSubmitted
+# precedes sessionStart, so a sessionStart carrying initialPrompt preserves
+# pending=true instead of immediately hiding the animation.
 #
 # When state == stopped, also extracts the last 16 unique assistant turns from the
 # transcript (each as {msg_id, tokens, ts}) and POSTs them as a `turns` array.
@@ -83,6 +85,17 @@ CLOSE_QUEUE="${AIRGBMATRIX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/airg
 IS_COPILOT=false
 if printf '%s' "$INPUT" | jq -e 'has("sessionId")' >/dev/null 2>&1; then
   IS_COPILOT=true
+fi
+
+# On a fresh Copilot session, hook order is userPromptSubmitted -> sessionStart
+# -> assistant work. Treat the initialPrompt-bearing start as part of that
+# first in-progress turn; otherwise its working POST races immediately after
+# the pending POST and clears the chugging bar.
+if [ "$ARG" = "working" ] && [ "$IS_COPILOT" = true ] \
+    && printf '%s' "$INPUT" \
+      | jq -e '(.initialPrompt? | type == "string") and (.initialPrompt | length > 0)' \
+        >/dev/null 2>&1; then
+  PENDING="true"
 fi
 
 # Reject auxiliary Copilot stops before they can create a lifecycle watcher.

@@ -191,6 +191,33 @@ class HookTests(unittest.TestCase):
         self.assertEqual(payload["state"], "working")
         self.assertTrue(payload["pending"])
 
+    def test_copilot_initial_session_start_preserves_pending_animation(self):
+        parent_sid = "bc1720c4-c553-4ade-895d-4e63df56a8fd"
+        payload = self.run_lifecycle_notify(
+            "working",
+            {
+                "sessionId": parent_sid,
+                "source": "new",
+                "initialPrompt": "Start a long-running task",
+            },
+        )
+        self.assertEqual(payload["id"], parent_sid)
+        self.assertEqual(payload["state"], "working")
+        self.assertTrue(payload["pending"])
+
+    def test_copilot_session_start_without_prompt_is_not_pending(self):
+        parent_sid = "bc1720c4-c553-4ade-895d-4e63df56a8fd"
+        payload = self.run_lifecycle_notify(
+            "working",
+            {
+                "sessionId": parent_sid,
+                "source": "new",
+            },
+        )
+        self.assertEqual(payload["id"], parent_sid)
+        self.assertEqual(payload["state"], "working")
+        self.assertFalse(payload["pending"])
+
     def test_copilot_registered_prompt_supports_custom_config_directory(self):
         parent_sid = "bc1720c4-c553-4ade-895d-4e63df56a8fd"
         payload = self.run_lifecycle_notify(

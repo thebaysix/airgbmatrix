@@ -36,6 +36,10 @@ board indefinitely.
 
 Copilot's native hook payload uses `sessionId` and `transcriptPath`; Claude's
 uses `session_id` and `transcript_path`. Both accessors are accepted.
+For a fresh Copilot session, `userPromptSubmitted` completes just before
+`sessionStart`; that start includes `initialPrompt`. The working hook preserves
+`pending=true` for this event so it does not erase the first turn's loading
+animation before assistant work begins.
 Auxiliary Copilot agents can report a transient `sessionId` while sharing the
 parent transcript; for stopped events, the UUID containing `events.jsonl` is
 the canonical board identity. A mismatched auxiliary stop is ignored rather
