@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 from datetime import datetime, timezone
 from threading import Lock
 
@@ -16,6 +17,8 @@ MAX_SLOTS = 8
 MAX_TURNS = 16
 VALID_STATES = {"working", "stopped", "closed"}
 STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "state.json")
+TOMBSTONE_PATH = STATE_PATH + ".closed"
+MAX_TOMBSTONES = 256
 
 app = Flask(__name__)
 _lock = Lock()
@@ -85,25 +88,42 @@ def _assign_color_indices(sessions: dict) -> None:
             s["color_idx"] = 0
 
 
-def _load_state() -> dict:
+def _load_legacy_tombstones() -> dict:
+    try:
+        with open(TOMBSTONE_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _load_state() -> tuple[dict, dict]:
     try:
         with open(STATE_PATH) as f:
             data = json.load(f)
         if not isinstance(data, dict):
-            return {}
+            return {}, {}
     except (OSError, ValueError):
-        return {}
+        return {}, {}
+    if data.get("format_version") == 2:
+        sessions = data.get("sessions")
+        closed_generations = data.get("closed_generations")
+        if not isinstance(sessions, dict) or not isinstance(closed_generations, dict):
+            return {}, {}
+    else:
+        sessions = data
+        closed_generations = _load_legacy_tombstones()
     # Backfill ts_epoch on turns persisted before that field existed, so the
     # rest of the code can assume it's always present.
-    for sess in data.values():
+    for sess in sessions.values():
         for t in sess.get("turns") or []:
             if "ts_epoch" not in t and t.get("ts"):
                 try:
                     t["ts_epoch"] = _epoch_from_iso(t["ts"])
                 except ValueError:
                     pass
-    _assign_color_indices(data)
-    return data
+    _assign_color_indices(sessions)
+    return sessions, closed_generations
 
 
 def _persist_locked() -> None:
@@ -111,13 +131,20 @@ def _persist_locked() -> None:
     try:
         tmp = STATE_PATH + ".tmp"
         with open(tmp, "w") as f:
-            json.dump(_sessions, f)
+            json.dump(
+                {
+                    "format_version": 2,
+                    "sessions": _sessions,
+                    "closed_generations": _closed_generations,
+                },
+                f,
+            )
         os.replace(tmp, STATE_PATH)
     except OSError:
         pass  # disk errors shouldn't crash the server; live state is still in memory
 
 
-_sessions: dict = _load_state()
+_sessions, _closed_generations = _load_state()
 
 
 def _trim_locked() -> None:
@@ -128,6 +155,18 @@ def _trim_locked() -> None:
     for k in list(_sessions.keys()):
         if k not in keep:
             del _sessions[k]
+
+
+def _trim_tombstones_locked() -> None:
+    if len(_closed_generations) <= MAX_TOMBSTONES:
+        return
+    ordered = sorted(
+        _closed_generations,
+        key=lambda sid: _closed_generations[sid].get("closed_at", 0),
+        reverse=True,
+    )
+    for sid in ordered[MAX_TOMBSTONES:]:
+        del _closed_generations[sid]
 
 
 def _owner_generation_parts(value):
@@ -150,6 +189,26 @@ def _is_older_owner(incoming, current) -> bool:
     return incoming_parts[1:] < current_parts[1:]
 
 
+def _is_newer_owner(incoming, current) -> bool:
+    incoming_parts = _owner_generation_parts(incoming)
+    current_parts = _owner_generation_parts(current)
+    if incoming_parts is None or current_parts is None:
+        return incoming != current
+    if incoming_parts[0] != current_parts[0]:
+        return True
+    return incoming_parts[1:] > current_parts[1:]
+
+
+def _is_different_boot(incoming, current) -> bool:
+    incoming_parts = _owner_generation_parts(incoming)
+    current_parts = _owner_generation_parts(current)
+    return (
+        incoming_parts is not None
+        and current_parts is not None
+        and incoming_parts[0] != current_parts[0]
+    )
+
+
 def get_ordered_sessions() -> list[dict]:
     with _lock:
         return sorted(_sessions.values(), key=lambda s: s["updated_at"], reverse=True)
@@ -161,6 +220,7 @@ def upsert_session():
     sid = data.get("id")
     state = data.get("state")
     incoming = data.get("turns")
+    lifecycle = data.get("lifecycle")
     owner_generation = data.get("owner_generation")
     if not isinstance(owner_generation, str) or not owner_generation:
         owner_generation = None
@@ -173,32 +233,99 @@ def upsert_session():
     # lease so a new session can claim that color, and the tile clears.
     if state == "closed":
         with _lock:
-            if sid in _sessions:
-                current_generation = _sessions[sid].get("owner_generation")
-                if (
-                    owner_generation is not None
-                    and current_generation is not None
-                    and owner_generation != current_generation
-                    and _is_older_owner(owner_generation, current_generation)
-                ):
-                    return jsonify(ok=True, ignored="stale_owner")
-                _audit("close-delete", sid, _sessions[sid].get("color_idx"), None)
+            existing = _sessions.get(sid)
+            current_generation = (
+                existing.get("owner_generation") if existing is not None else None
+            )
+            tombstone = _closed_generations.get(sid)
+            tombstone_generation = (
+                tombstone.get("owner_generation") if tombstone is not None else None
+            )
+            known_generation = current_generation or tombstone_generation
+            if (
+                owner_generation is not None
+                and known_generation is not None
+                and owner_generation != known_generation
+                and (
+                    _is_different_boot(owner_generation, known_generation)
+                    or _is_older_owner(owner_generation, known_generation)
+                )
+            ):
+                return jsonify(ok=True, ignored="stale_owner")
+            if existing is not None:
+                _audit("close-delete", sid, existing.get("color_idx"), None)
                 del _sessions[sid]
-                _persist_locked()
+            closed_generation = owner_generation or known_generation
+            _closed_generations[sid] = {
+                "owner_generation": closed_generation,
+                "closed_at": time.time(),
+                "allow_same_owner_start": (
+                    lifecycle is None and owner_generation is None
+                ),
+            }
+            _trim_tombstones_locked()
+            _persist_locked()
         return jsonify(ok=True)
     with _lock:
         existing = _sessions.get(sid, {})
+        tombstone = _closed_generations.get(sid)
+        if tombstone is not None:
+            closed_generation = tombstone.get("owner_generation")
+            is_explicit_start = lifecycle == "working" or (
+                lifecycle is None
+                and state == "working"
+                and owner_generation is not None
+                and _is_newer_owner(owner_generation, closed_generation)
+            )
+            is_newer = (
+                owner_generation is None
+                or _is_newer_owner(owner_generation, closed_generation)
+                or (
+                    tombstone.get("allow_same_owner_start", False)
+                    and owner_generation == closed_generation
+                )
+            )
+            if not is_explicit_start or not is_newer:
+                return jsonify(ok=True, ignored="closed_owner")
+            del _closed_generations[sid]
         current_generation = existing.get("owner_generation")
         if (
             owner_generation is not None
             and current_generation is not None
             and owner_generation != current_generation
-            and _is_older_owner(owner_generation, current_generation)
+            and (
+                _is_older_owner(owner_generation, current_generation)
+                or (
+                    _is_different_boot(owner_generation, current_generation)
+                    and lifecycle != "working"
+                    and existing.get("owner_started", False)
+                )
+            )
         ):
             return jsonify(ok=True, ignored="stale_owner")
         turns = list(existing.get("turns") or [])
 
         if isinstance(incoming, list):
+            stored_markers = [
+                turn
+                for turn in turns
+                if turn.get("kind") in ("compact", "clear")
+            ]
+            turns = [
+                turn
+                for turn in turns
+                if turn.get("kind", "turn") not in ("compact", "clear")
+            ]
+            incoming_markers = [
+                turn
+                for turn in incoming
+                if turn.get("kind") in ("compact", "clear")
+            ]
+            incoming = [
+                turn
+                for turn in incoming
+                if turn.get("kind", "turn") not in ("compact", "clear")
+            ]
             # Merge by msg_id (= user_uuid for the user-turn schema). Within one
             # metrics version the counters are monotonic as transcript data
             # flushes, so max() handles backfill and stale re-POSTs. A newer
@@ -225,13 +352,14 @@ def upsert_session():
             # per-ID corrections. Reset first so turns that the new parser
             # deliberately excludes (for example, Copilot subagent prompts)
             # disappear instead of surviving forever under obsolete msg_ids.
-            if incoming_metrics_version > stored_metrics_version:
+            if incoming and incoming_metrics_version > stored_metrics_version:
                 turns = []
-            elif incoming_metrics_version < stored_metrics_version:
+            elif incoming and incoming_metrics_version < stored_metrics_version:
                 # Reject an older snapshot wholesale. Comparing only per turn
                 # would let an obsolete ID that v4 pruned reappear as a
                 # seemingly new v3 turn.
                 incoming = []
+            incoming += stored_markers + incoming_markers
 
             by_id: dict[str, dict] = {}
             for t in turns:
@@ -355,6 +483,10 @@ def upsert_session():
             new_record["owner_generation"] = owner_generation
         elif existing.get("owner_generation"):
             new_record["owner_generation"] = existing["owner_generation"]
+        new_record["owner_started"] = lifecycle == "working" or (
+            owner_generation == existing.get("owner_generation")
+            and existing.get("owner_started", False)
+        )
         # --- BLINK_ON_PERMISSIONS feature gate ---
         # When enabled, accept and persist an `awaiting` flag (true while the
         # session is blocked on a permission prompt). When disabled, the flag

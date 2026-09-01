@@ -27,8 +27,12 @@ real session. The watcher follows the nearest Copilot/Claude ancestor using
 its PID plus Linux process start time, follows a replacement PID after resume,
 and posts `closed` when the owner disappears. State updates carry the same
 owner generation, allowing the server to reject a delayed close from a
-pre-resume process. This is a Linux/WSL liveness lease rather than an age
-timeout, so an open idle tab remains on the board indefinitely.
+pre-resume process. The server retains a bounded generation tombstone so a
+request already in flight cannot recreate a closed session. If the server
+stays unavailable, the watcher writes the close to a durable user-state queue
+and exits; future lifecycle hooks retry queued closes. This is a Linux/WSL
+liveness lease rather than an age timeout, so an open idle tab remains on the
+board indefinitely.
 
 Copilot's native hook payload uses `sessionId` and `transcriptPath`; Claude's
 uses `session_id` and `transcript_path`. Both accessors are accepted.

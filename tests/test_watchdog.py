@@ -1,4 +1,5 @@
 import fcntl
+import json
 import tempfile
 import threading
 import time
@@ -77,6 +78,7 @@ class SessionWatchdogTests(unittest.TestCase):
                         "session-id",
                         marker,
                         lock,
+                        root / "close-queue",
                     )
                 post_closed.assert_not_called()
             finally:
@@ -142,7 +144,7 @@ class SessionWatchdogTests(unittest.TestCase):
                 mock.patch.object(
                     session_watchdog,
                     "_post_closed",
-                    return_value=False,
+                    return_value="failed",
                 ) as post_closed,
             ):
                 with self.assertRaisesRegex(RuntimeError, "resumed owner"):
@@ -152,6 +154,7 @@ class SessionWatchdogTests(unittest.TestCase):
                         "session-id",
                         marker,
                         lock,
+                        root / "close-queue",
                     )
 
             self.assertEqual(post_closed.call_count, 1)
@@ -174,9 +177,9 @@ class SessionWatchdogTests(unittest.TestCase):
             def process_is_live(_root, identity):
                 return identity == (30, "900")
 
-            def close_then_resume(_session_id, _identity):
+            def close_then_resume(_proc_root, _session_id, _identity):
                 marker.write_text("30 900")
-                return True
+                return "closed"
 
             with (
                 mock.patch.object(
@@ -202,10 +205,119 @@ class SessionWatchdogTests(unittest.TestCase):
                         "session-id",
                         marker,
                         lock,
+                        root / "close-queue",
                     )
 
             self.assertEqual(post_closed.call_count, 1)
             self.assertEqual(marker.read_text(), "30 900")
+
+    def test_failed_close_is_queued_and_watcher_exits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = root / "session"
+            lock = root / "session.watch.lock"
+            marker.write_text("20 800")
+
+            with (
+                mock.patch.object(
+                    session_watchdog,
+                    "_is_same_process",
+                    return_value=False,
+                ),
+                mock.patch.object(session_watchdog.time, "sleep"),
+                mock.patch.object(
+                    session_watchdog,
+                    "_post_closed",
+                    return_value="failed",
+                ) as post_closed,
+                mock.patch.object(
+                    session_watchdog,
+                    "_owner_generation",
+                    return_value="boot-a:800:20",
+                ),
+            ):
+                session_watchdog.watch(
+                    root,
+                    (20, "800"),
+                    "session-id",
+                    marker,
+                    lock,
+                    root / "close-queue",
+                )
+
+            self.assertEqual(
+                post_closed.call_count,
+                session_watchdog.MAX_CLOSE_ATTEMPTS,
+            )
+            queued = list((root / "close-queue").glob("*.json"))
+            self.assertEqual(len(queued), 1)
+            self.assertEqual(
+                json.loads(queued[0].read_text()),
+                {
+                    "id": "session-id",
+                    "owner_generation": "boot-a:800:20",
+                },
+            )
+
+    def test_queue_drain_removes_completed_and_keeps_failed_closes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_dir = Path(tmp)
+            session_watchdog._queue_close(
+                queue_dir,
+                "closed-session",
+                "boot-a:800:20",
+            )
+            session_watchdog._queue_close(
+                queue_dir,
+                "retry-session",
+                "boot-a:900:30",
+            )
+
+            def post_result(session_id, _generation):
+                return "stale" if session_id == "closed-session" else "failed"
+
+            with mock.patch.object(
+                session_watchdog,
+                "_post_generation",
+                side_effect=post_result,
+            ):
+                session_watchdog.drain_queue(queue_dir)
+
+            queued_ids = {
+                json.loads(path.read_text())["id"]
+                for path in queue_dir.glob("*.json")
+            }
+            self.assertEqual(queued_ids, {"retry-session"})
+
+    def test_queue_drain_does_not_unlink_concurrent_new_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            queue_dir = Path(tmp)
+            session_watchdog._queue_close(
+                queue_dir,
+                "session-id",
+                "boot-old:800:20",
+            )
+
+            def replace_during_post(_session_id, _generation):
+                session_watchdog._queue_close(
+                    queue_dir,
+                    "session-id",
+                    "boot-new:900:30",
+                )
+                return "stale"
+
+            with mock.patch.object(
+                session_watchdog,
+                "_post_generation",
+                side_effect=replace_during_post,
+            ):
+                session_watchdog.drain_queue(queue_dir)
+
+            generations = {
+                json.loads(path.read_text())["owner_generation"]
+                for path in queue_dir.glob("*.json")
+            }
+            self.assertEqual(generations, {"boot-new:900:30"})
 
 
 if __name__ == "__main__":

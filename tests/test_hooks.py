@@ -488,6 +488,7 @@ class HookTests(unittest.TestCase):
 
         payload = self.run_notify(lines)
         self.assertEqual(payload["state"], "stopped")
+        self.assertEqual(payload["lifecycle"], "stopped")
         self.assertFalse(payload["pending"])
         turns = payload["turns"]
         self.assertEqual([turn["msg_id"] for turn in turns], ["user-1", "user-2"])

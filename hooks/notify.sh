@@ -79,6 +79,7 @@ fi
 # emit just before sessionStart. Claude payloads use snake_case and bypass this.
 SESSION_REGISTRY="${AIRGBMATRIX_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/airgbmatrix-sessions}"
 SESSION_MARKER="$SESSION_REGISTRY/$SID"
+CLOSE_QUEUE="${AIRGBMATRIX_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/airgbmatrix}/close-queue"
 IS_COPILOT=false
 if printf '%s' "$INPUT" | jq -e 'has("sessionId")' >/dev/null 2>&1; then
   IS_COPILOT=true
@@ -110,6 +111,15 @@ fi
 # watcher can follow a replacement process without deleting the resumed tile.
 OWNER_GENERATION=""
 if [[ "$SID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+  if [ "${AIRGBMATRIX_DISABLE_WATCHDOG:-0}" != "1" ]; then
+    if command -v setsid >/dev/null 2>&1; then
+      setsid -f python3 "$SCRIPT_DIR/session_watchdog.py" drain \
+        "$CLOSE_QUEUE" </dev/null >/dev/null 2>&1
+    else
+      nohup python3 "$SCRIPT_DIR/session_watchdog.py" drain \
+        "$CLOSE_QUEUE" </dev/null >/dev/null 2>&1 &
+    fi
+  fi
   OWNER=$(python3 "$SCRIPT_DIR/session_watchdog.py" owner "$$" 2>/dev/null || true)
   if [[ "$OWNER" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][^[:space:]]+$ ]]; then
     read -r OWNER_PID OWNER_START OWNER_GENERATION <<< "$OWNER"
@@ -132,11 +142,13 @@ if [[ "$SID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
       if command -v setsid >/dev/null 2>&1; then
         setsid -f python3 "$SCRIPT_DIR/session_watchdog.py" watch \
           "$OWNER_PID" "$OWNER_START" "$SID" \
-          "$SESSION_MARKER" "$WATCH_LOCK" </dev/null >/dev/null 2>&1
+          "$SESSION_MARKER" "$WATCH_LOCK" "$CLOSE_QUEUE" \
+          </dev/null >/dev/null 2>&1
       else
         nohup python3 "$SCRIPT_DIR/session_watchdog.py" watch \
           "$OWNER_PID" "$OWNER_START" "$SID" \
-          "$SESSION_MARKER" "$WATCH_LOCK" </dev/null >/dev/null 2>&1 &
+          "$SESSION_MARKER" "$WATCH_LOCK" "$CLOSE_QUEUE" \
+          </dev/null >/dev/null 2>&1 &
       fi
     fi
   fi
@@ -486,11 +498,13 @@ if [ "$BLINK_ON_PERMISSIONS" = "1" ] && [ -n "$AWAITING" ]; then
   PAYLOAD=$(jq -nc \
     --arg id "$SID" \
     --arg state "$STATE" \
+    --arg lifecycle "$ARG" \
     --arg owner_generation "$OWNER_GENERATION" \
     --argjson pending "$PENDING" \
     --argjson awaiting "$AWAITING" \
     --argjson turns "$TURNS_JSON" \
-    '{id:$id, state:$state, pending:$pending, awaiting:$awaiting}
+    '{id:$id, state:$state, lifecycle:$lifecycle,
+      pending:$pending, awaiting:$awaiting}
      + (if $owner_generation != "" then
           {owner_generation:$owner_generation} else {} end)
      + (if ($turns | length) > 0 then {turns:$turns} else {} end)' 2>/dev/null) || exit 0
@@ -499,10 +513,11 @@ else
   PAYLOAD=$(jq -nc \
     --arg id "$SID" \
     --arg state "$STATE" \
+    --arg lifecycle "$ARG" \
     --arg owner_generation "$OWNER_GENERATION" \
     --argjson pending "$PENDING" \
     --argjson turns "$TURNS_JSON" \
-    '{id:$id, state:$state, pending:$pending}
+    '{id:$id, state:$state, lifecycle:$lifecycle, pending:$pending}
      + (if $owner_generation != "" then
           {owner_generation:$owner_generation} else {} end)
      + (if ($turns | length) > 0 then {turns:$turns} else {} end)' 2>/dev/null) || exit 0

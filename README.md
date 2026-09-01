@@ -182,8 +182,11 @@ the terminal at each lifecycle hook and posts the same `closed` state when the
 owning Copilot/Claude process disappears. It uses PID start time to reject PID
 reuse, follows a replacement process on resume, and retries temporary server
 failures. Each state update carries that owner generation, so the server
-rejects a delayed close from a pre-resume process. `/airgb-clear` remains the
-manual recovery path. Endpoints:
+rejects delayed state updates and closes from a pre-resume process. A bounded
+persistent tombstone prevents requests already in flight from resurrecting a
+closed tile. Failed watchdog closes move to a durable per-user queue and are
+retried by later lifecycle hooks without retaining one Python process per
+closed session. `/airgb-clear` remains the manual recovery path. Endpoints:
 
 - `POST /session` — upsert a session by `id`. Optional `turns` array of
   `{msg_id, metrics_version, tokens, ts, added, removed}`; the server **upserts by `msg_id`**
@@ -338,7 +341,10 @@ Every real lifecycle hook also refreshes a detached `session_watchdog.py`
 lease tied to the CLI process. Closing a terminal tab can kill the CLI before
 `sessionEnd` runs; the watchdog detects that exit and removes the board record
 within roughly four seconds. This requires Linux `/proc` and `setsid` (the
-documented WSL deployment); normal `SessionEnd` remains portable.
+documented WSL deployment); normal `SessionEnd` remains portable. During a
+server outage, each watcher retries for about a minute, records the unresolved
+close under `${XDG_STATE_HOME:-~/.local/state}/airgbmatrix/close-queue`, and
+exits. A later lifecycle hook drains the queue.
 
 Tab color persists past `SessionEnd` even though the board tile is removed —
 the OSC 4 escape stays in effect on the terminal until the tab is closed or

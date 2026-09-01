@@ -3,6 +3,7 @@
 
 import json
 import fcntl
+import hashlib
 import os
 import sys
 import time
@@ -14,6 +15,7 @@ POLL_SECONDS = 2
 RETRY_SECONDS = 5
 LOCK_RETRY_SECONDS = 0.1
 LOCK_HANDOFF_SECONDS = 10
+MAX_CLOSE_ATTEMPTS = 12
 
 
 def _process_info(proc_root: Path, pid: int):
@@ -112,13 +114,14 @@ def _claim_lock(lock_handle, lock: Path, identity) -> bool:
             time.sleep(LOCK_RETRY_SECONDS)
 
 
-def _post_closed(session_id: str, identity) -> bool:
+def _post_generation(session_id: str, generation: str) -> str:
     host = os.environ.get("CLAUDE_LED_HOST", "localhost")
     port = os.environ.get("CLAUDE_LED_PORT", "5000")
     body = json.dumps({
         "id": session_id,
         "state": "closed",
-        "owner_generation": _owner_generation(Path("/proc"), identity),
+        "lifecycle": "closed",
+        "owner_generation": generation,
     }).encode()
     request = urllib.request.Request(
         f"http://{host}:{port}/session",
@@ -129,27 +132,86 @@ def _post_closed(session_id: str, identity) -> bool:
     try:
         with urllib.request.urlopen(request, timeout=2) as response:
             if not 200 <= response.status < 300:
-                return False
+                return "failed"
             try:
                 result = json.loads(response.read())
             except (json.JSONDecodeError, UnicodeDecodeError):
-                return True
-            return result.get("ignored") != "stale_owner"
+                return "closed"
+            if result.get("ignored") in {"stale_owner", "closed_owner"}:
+                return "stale"
+            return "closed"
     except (OSError, urllib.error.URLError):
-        return False
+        return "failed"
 
 
-def watch(proc_root: Path, identity, session_id: str, marker: Path, lock: Path) -> None:
+def _post_closed(proc_root: Path, session_id: str, identity) -> str:
+    return _post_generation(
+        session_id,
+        _owner_generation(proc_root, identity),
+    )
+
+
+def _queue_close(queue_dir: Path, session_id: str, generation: str) -> None:
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    name = hashlib.sha256(
+        f"{session_id}\0{generation}".encode()
+    ).hexdigest() + ".json"
+    path = queue_dir / name
+    temporary = path.with_suffix(f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps({
+        "id": session_id,
+        "owner_generation": generation,
+    }))
+    os.replace(temporary, path)
+
+
+def drain_queue(queue_dir: Path) -> None:
+    if not queue_dir.is_dir():
+        return
+    lock_handle = (queue_dir / ".drain.lock").open("a+")
+    try:
+        try:
+            fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        for path in list(queue_dir.glob("*.json")):
+            try:
+                item = json.loads(path.read_text())
+                session_id = item["id"]
+                generation = item["owner_generation"]
+                if not isinstance(session_id, str) or not isinstance(generation, str):
+                    raise ValueError
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                continue
+            if _post_generation(session_id, generation) != "failed":
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+    finally:
+        lock_handle.close()
+
+
+def watch(
+    proc_root: Path,
+    identity,
+    session_id: str,
+    marker: Path,
+    lock: Path,
+    queue_dir: Path,
+) -> None:
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock_handle = lock.open("a+")
     try:
         if not _claim_lock(lock_handle, lock, identity):
             return
 
+        close_attempts = 0
         while True:
             latest = _marker_identity(marker)
             if latest is not None and latest != identity:
                 identity = latest
+                close_attempts = 0
                 _write_lock_identity(lock_handle, identity)
             if _is_same_process(proc_root, identity):
                 time.sleep(POLL_SECONDS)
@@ -161,9 +223,11 @@ def watch(proc_root: Path, identity, session_id: str, marker: Path, lock: Path) 
             latest = _marker_identity(marker)
             if latest is not None and latest != identity:
                 identity = latest
+                close_attempts = 0
                 _write_lock_identity(lock_handle, identity)
                 continue
-            if _post_closed(session_id, identity):
+            result = _post_closed(proc_root, session_id, identity)
+            if result != "failed":
                 latest = _marker_identity(marker)
                 if (
                     latest is not None
@@ -171,8 +235,27 @@ def watch(proc_root: Path, identity, session_id: str, marker: Path, lock: Path) 
                     and _is_same_process(proc_root, latest)
                 ):
                     identity = latest
+                    close_attempts = 0
                     _write_lock_identity(lock_handle, identity)
                     continue
+                break
+            close_attempts += 1
+            if close_attempts >= MAX_CLOSE_ATTEMPTS:
+                latest = _marker_identity(marker)
+                if (
+                    latest is not None
+                    and latest != identity
+                    and _is_same_process(proc_root, latest)
+                ):
+                    identity = latest
+                    close_attempts = 0
+                    _write_lock_identity(lock_handle, identity)
+                    continue
+                _queue_close(
+                    queue_dir,
+                    session_id,
+                    _owner_generation(proc_root, identity),
+                )
                 break
             time.sleep(RETRY_SECONDS)
     finally:
@@ -189,7 +272,8 @@ def main() -> None:
     if len(sys.argv) < 3:
         raise SystemExit(
             "usage: session_watchdog.py owner START_PID | "
-            "watch PID START_TIME SESSION_ID MARKER LOCK"
+            "watch PID START_TIME SESSION_ID MARKER LOCK QUEUE_DIR | "
+            "drain QUEUE_DIR"
         )
 
     command = sys.argv[1]
@@ -199,14 +283,18 @@ def main() -> None:
         if owner is not None:
             print(f"{owner[0]} {owner[1]} {_owner_generation(proc_root, owner)}")
         return
-    if command == "watch" and len(sys.argv) == 7:
+    if command == "watch" and len(sys.argv) == 8:
         watch(
             proc_root,
             (int(sys.argv[2]), sys.argv[3]),
             sys.argv[4],
             Path(sys.argv[5]),
             Path(sys.argv[6]),
+            Path(sys.argv[7]),
         )
+        return
+    if command == "drain" and len(sys.argv) == 3:
+        drain_queue(Path(sys.argv[2]))
         return
     raise SystemExit("invalid watchdog arguments")
 

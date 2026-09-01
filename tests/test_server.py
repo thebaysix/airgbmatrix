@@ -1,4 +1,6 @@
 import sys
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,13 +14,16 @@ import server  # noqa: E402
 class ServerMergeTests(unittest.TestCase):
     def setUp(self):
         self.original_sessions = server._sessions
+        self.original_closed_generations = server._closed_generations
         self.original_persist = server._persist_locked
         server._sessions = {}
+        server._closed_generations = {}
         server._persist_locked = lambda: None
         self.client = server.app.test_client()
 
     def tearDown(self):
         server._sessions = self.original_sessions
+        server._closed_generations = self.original_closed_generations
         server._persist_locked = self.original_persist
 
     def post_turn(self, turn):
@@ -340,6 +345,236 @@ class ServerMergeTests(unittest.TestCase):
         )
         self.assertEqual(newer_close.status_code, 200)
         self.assertNotIn("session-1", server._sessions)
+
+    def test_incremental_marker_survives_versioned_turn_snapshot(self):
+        self.post_turn(
+            {
+                "msg_id": "turn-1",
+                "metrics_version": 5,
+                "tokens": 100,
+                "ts": "2026-01-01T00:00:00Z",
+                "added": 0,
+                "removed": 0,
+            }
+        )
+        marker = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "working",
+                "turns": [
+                    {
+                        "msg_id": "compact-1",
+                        "kind": "compact",
+                        "tokens": 0,
+                        "ts": "2026-01-01T00:00:01Z",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(marker.status_code, 200)
+        self.assertEqual(
+            [turn["msg_id"] for turn in server._sessions["session-1"]["turns"]],
+            ["turn-1", "compact-1"],
+        )
+
+        upgraded = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "stopped",
+                "turns": [
+                    {
+                        "msg_id": "turn-1",
+                        "metrics_version": 6,
+                        "tokens": 90,
+                        "ts": "2026-01-01T00:00:00Z",
+                        "added": 0,
+                        "removed": 0,
+                    }
+                ],
+            },
+        )
+        self.assertEqual(upgraded.status_code, 200)
+        self.assertEqual(
+            [turn["msg_id"] for turn in server._sessions["session-1"]["turns"]],
+            ["turn-1", "compact-1"],
+        )
+
+    def test_delayed_state_update_cannot_resurrect_closed_session(self):
+        generation = "boot-a:800:20"
+        self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "working",
+                "lifecycle": "working",
+                "owner_generation": generation,
+            },
+        )
+        self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "closed",
+                "lifecycle": "closed",
+                "owner_generation": generation,
+            },
+        )
+        delayed = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "stopped",
+                "lifecycle": "stopped",
+                "owner_generation": generation,
+            },
+        )
+
+        self.assertEqual(delayed.get_json()["ignored"], "closed_owner")
+        self.assertNotIn("session-1", server._sessions)
+
+    def test_new_owner_start_supersedes_closed_session_tombstone(self):
+        server._closed_generations["session-1"] = {
+            "owner_generation": "boot-a:800:20",
+            "closed_at": 1,
+        }
+        resumed = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "working",
+                "lifecycle": "working",
+                "owner_generation": "boot-a:900:30",
+            },
+        )
+
+        self.assertEqual(resumed.status_code, 200)
+        self.assertIn("session-1", server._sessions)
+        self.assertNotIn("session-1", server._closed_generations)
+
+    def test_stale_close_cannot_downgrade_newer_tombstone(self):
+        server._closed_generations["session-1"] = {
+            "owner_generation": "boot-a:900:30",
+            "closed_at": 1,
+        }
+        stale = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "closed",
+                "lifecycle": "closed",
+                "owner_generation": "boot-a:800:20",
+            },
+        )
+
+        self.assertEqual(stale.get_json()["ignored"], "stale_owner")
+        self.assertEqual(
+            server._closed_generations["session-1"]["owner_generation"],
+            "boot-a:900:30",
+        )
+
+    def test_previous_boot_close_cannot_delete_explicitly_started_owner(self):
+        self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "working",
+                "lifecycle": "working",
+                "owner_generation": "boot-new:900:30",
+            },
+        )
+        old_close = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "closed",
+                "lifecycle": "closed",
+                "owner_generation": "boot-old:800:20",
+            },
+        )
+
+        self.assertEqual(old_close.get_json()["ignored"], "stale_owner")
+        self.assertIn("session-1", server._sessions)
+
+    def test_state_and_tombstones_persist_in_one_atomic_envelope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original_state_path = server.STATE_PATH
+            original_tombstone_path = server.TOMBSTONE_PATH
+            try:
+                server.STATE_PATH = str(Path(tmp) / "state.json")
+                server.TOMBSTONE_PATH = server.STATE_PATH + ".closed"
+                server._sessions["session-1"] = {
+                    "id": "session-1",
+                    "state": "stopped",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "turns": [],
+                    "pending": False,
+                }
+                server._closed_generations["closed-1"] = {
+                    "owner_generation": "boot-a:800:20",
+                    "closed_at": 1,
+                }
+
+                self.original_persist()
+                envelope = json.loads(Path(server.STATE_PATH).read_text())
+                loaded_sessions, loaded_closed = server._load_state()
+
+                self.assertEqual(envelope["format_version"], 2)
+                self.assertIn("session-1", loaded_sessions)
+                self.assertIn("closed-1", loaded_closed)
+                self.assertFalse(Path(server.TOMBSTONE_PATH).exists())
+            finally:
+                server.STATE_PATH = original_state_path
+                server.TOMBSTONE_PATH = original_tombstone_path
+
+    def test_ownerless_close_tombstone_rejects_delayed_state(self):
+        self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "working",
+                "lifecycle": "working",
+            },
+        )
+        self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "closed",
+                "lifecycle": "closed",
+            },
+        )
+        delayed = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "stopped",
+                "lifecycle": "stopped",
+            },
+        )
+
+        self.assertEqual(delayed.get_json()["ignored"], "closed_owner")
+        self.assertNotIn("session-1", server._sessions)
+        self.assertIn("session-1", server._closed_generations)
+
+    def test_newer_legacy_working_payload_supersedes_tombstone(self):
+        server._closed_generations["session-1"] = {
+            "owner_generation": "boot-a:800:20",
+            "closed_at": 1,
+        }
+        legacy_start = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "working",
+                "owner_generation": "boot-a:900:30",
+            },
+        )
+
+        self.assertEqual(legacy_start.status_code, 200)
+        self.assertIn("session-1", server._sessions)
+        self.assertNotIn("session-1", server._closed_generations)
 
 
 if __name__ == "__main__":
