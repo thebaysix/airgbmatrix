@@ -77,20 +77,67 @@ fi
 # They never receive sessionStart/sessionEnd. Track IDs seen by sessionStart;
 # the state-directory fallback covers the initial prompt, which Copilot can
 # emit just before sessionStart. Claude payloads use snake_case and bypass this.
-if printf '%s' "$INPUT" | jq -e 'has("sessionId")' >/dev/null 2>&1 \
-    && [[ "$SID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-  COPILOT_SESSION_REGISTRY="${AIRGBMATRIX_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/airgbmatrix-copilot-sessions}"
-  COPILOT_SESSION_MARKER="$COPILOT_SESSION_REGISTRY/$SID"
-  if [ "$ARG" = "working" ]; then
-    mkdir -p "$COPILOT_SESSION_REGISTRY" 2>/dev/null || true
-    : > "$COPILOT_SESSION_MARKER" 2>/dev/null || true
-  elif [ "$ARG" = "closed" ]; then
-    rm -f "$COPILOT_SESSION_MARKER" 2>/dev/null || true
-  elif [ "$ARG" = "pending" ]; then
+SESSION_REGISTRY="${AIRGBMATRIX_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/airgbmatrix-sessions}"
+SESSION_MARKER="$SESSION_REGISTRY/$SID"
+IS_COPILOT=false
+if printf '%s' "$INPUT" | jq -e 'has("sessionId")' >/dev/null 2>&1; then
+  IS_COPILOT=true
+fi
+
+# Reject auxiliary Copilot stops before they can create a lifecycle watcher.
+if [ "$ARG" = "stopped" ] && [ "$IS_COPILOT" = true ] \
+    && [ -n "$TRANSCRIPT" ]; then
+  TRANSCRIPT_SID=$(basename "$(dirname "$TRANSCRIPT")")
+  if [[ "$TRANSCRIPT_SID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] \
+      && [ "$TRANSCRIPT_SID" != "$SID" ]; then
+    exit 0
+  fi
+fi
+
+if [ "$IS_COPILOT" = true ] && [[ "$SID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+  if [ "$ARG" = "pending" ]; then
     COPILOT_STATE_ROOT="${COPILOT_HOME:-$HOME/.copilot}/session-state"
-    if [ ! -e "$COPILOT_SESSION_MARKER" ] \
+    if [ ! -e "$SESSION_MARKER" ] \
         && [ ! -d "$COPILOT_STATE_ROOT/$SID" ]; then
       exit 0
+    fi
+  fi
+fi
+
+# SessionEnd cannot run when a terminal closes the CLI process abruptly.
+# Keep a detached watcher tied to the real Copilot/Claude process as a
+# liveness fallback. SessionStart/resume updates the marker identity so one
+# watcher can follow a replacement process without deleting the resumed tile.
+OWNER_GENERATION=""
+if [[ "$SID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+  OWNER=$(python3 "$SCRIPT_DIR/session_watchdog.py" owner "$$" 2>/dev/null || true)
+  if [[ "$OWNER" =~ ^[0-9]+[[:space:]][0-9]+[[:space:]][^[:space:]]+$ ]]; then
+    read -r OWNER_PID OWNER_START OWNER_GENERATION <<< "$OWNER"
+    OWNER_IDENTITY="${OWNER_PID} ${OWNER_START}"
+  fi
+  if [ "$ARG" = "working" ]; then
+    mkdir -p "$SESSION_REGISTRY" 2>/dev/null || true
+    : > "$SESSION_MARKER" 2>/dev/null || true
+  fi
+  if [ "$ARG" = "closed" ]; then
+    MARKER_OWNER=$(cat "$SESSION_MARKER" 2>/dev/null || true)
+    if [ -z "${OWNER_IDENTITY:-}" ] || [ "$MARKER_OWNER" = "$OWNER_IDENTITY" ]; then
+      rm -f "$SESSION_MARKER" 2>/dev/null || true
+    fi
+  elif [ "${AIRGBMATRIX_DISABLE_WATCHDOG:-0}" != "1" ]; then
+    mkdir -p "$SESSION_REGISTRY" 2>/dev/null || true
+    if [ -n "$OWNER_GENERATION" ]; then
+      printf '%s\n' "$OWNER_IDENTITY" > "$SESSION_MARKER" 2>/dev/null || true
+      WATCH_LOCK="$SESSION_MARKER.watch.lock"
+      if command -v setsid >/dev/null 2>&1; then
+        setsid -f python3 "$SCRIPT_DIR/session_watchdog.py" watch \
+          "$OWNER_PID" "$OWNER_START" "$SID" \
+          "$SESSION_MARKER" "$WATCH_LOCK" </dev/null >/dev/null 2>&1
+      else
+        nohup python3 "$SCRIPT_DIR/session_watchdog.py" watch \
+          "$OWNER_PID" "$OWNER_START" "$SID" \
+          "$SESSION_MARKER" "$WATCH_LOCK" </dev/null >/dev/null 2>&1 &
+      fi
     fi
   fi
 fi
@@ -116,13 +163,6 @@ if [ "$STATE" = "stopped" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; the
   # sessionId while pointing at the parent session's events.jsonl. Ignore that
   # stop: redirecting it would falsely mark the still-running parent stopped,
   # while trusting it would create a phantom tile.
-  TRANSCRIPT_SID=$(basename "$(dirname "$TRANSCRIPT")")
-  if [[ "$TRANSCRIPT_SID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
-    if [ "$TRANSCRIPT_SID" != "$SID" ]; then
-      exit 0
-    fi
-  fi
-
   # --- GitHub Copilot transcript (events.jsonl): {type,data,id,timestamp,parentId}.
   #     Prefer exact cache-excluded usage from Copilot's session-store.db.
   #     Plain Copilot installations without that store fall back to estimated
@@ -446,19 +486,25 @@ if [ "$BLINK_ON_PERMISSIONS" = "1" ] && [ -n "$AWAITING" ]; then
   PAYLOAD=$(jq -nc \
     --arg id "$SID" \
     --arg state "$STATE" \
+    --arg owner_generation "$OWNER_GENERATION" \
     --argjson pending "$PENDING" \
     --argjson awaiting "$AWAITING" \
     --argjson turns "$TURNS_JSON" \
     '{id:$id, state:$state, pending:$pending, awaiting:$awaiting}
+     + (if $owner_generation != "" then
+          {owner_generation:$owner_generation} else {} end)
      + (if ($turns | length) > 0 then {turns:$turns} else {} end)' 2>/dev/null) || exit 0
   # --- end BLINK_ON_PERMISSIONS ---
 else
   PAYLOAD=$(jq -nc \
     --arg id "$SID" \
     --arg state "$STATE" \
+    --arg owner_generation "$OWNER_GENERATION" \
     --argjson pending "$PENDING" \
     --argjson turns "$TURNS_JSON" \
     '{id:$id, state:$state, pending:$pending}
+     + (if $owner_generation != "" then
+          {owner_generation:$owner_generation} else {} end)
      + (if ($turns | length) > 0 then {turns:$turns} else {} end)' 2>/dev/null) || exit 0
 fi
 

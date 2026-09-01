@@ -130,6 +130,26 @@ def _trim_locked() -> None:
             del _sessions[k]
 
 
+def _owner_generation_parts(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        boot_id, start_time, pid = value.rsplit(":", 2)
+        return boot_id, int(start_time), int(pid)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_older_owner(incoming, current) -> bool:
+    incoming_parts = _owner_generation_parts(incoming)
+    current_parts = _owner_generation_parts(current)
+    if incoming_parts is None or current_parts is None:
+        return False
+    if incoming_parts[0] != current_parts[0]:
+        return False
+    return incoming_parts[1:] < current_parts[1:]
+
+
 def get_ordered_sessions() -> list[dict]:
     with _lock:
         return sorted(_sessions.values(), key=lambda s: s["updated_at"], reverse=True)
@@ -141,6 +161,9 @@ def upsert_session():
     sid = data.get("id")
     state = data.get("state")
     incoming = data.get("turns")
+    owner_generation = data.get("owner_generation")
+    if not isinstance(owner_generation, str) or not owner_generation:
+        owner_generation = None
     legacy_tokens = data.get("tokens")
     ts_default = data.get("ts") or datetime.now(timezone.utc).isoformat()
     if not sid or state not in VALID_STATES:
@@ -151,12 +174,28 @@ def upsert_session():
     if state == "closed":
         with _lock:
             if sid in _sessions:
+                current_generation = _sessions[sid].get("owner_generation")
+                if (
+                    owner_generation is not None
+                    and current_generation is not None
+                    and owner_generation != current_generation
+                    and _is_older_owner(owner_generation, current_generation)
+                ):
+                    return jsonify(ok=True, ignored="stale_owner")
                 _audit("close-delete", sid, _sessions[sid].get("color_idx"), None)
                 del _sessions[sid]
                 _persist_locked()
         return jsonify(ok=True)
     with _lock:
         existing = _sessions.get(sid, {})
+        current_generation = existing.get("owner_generation")
+        if (
+            owner_generation is not None
+            and current_generation is not None
+            and owner_generation != current_generation
+            and _is_older_owner(owner_generation, current_generation)
+        ):
+            return jsonify(ok=True, ignored="stale_owner")
         turns = list(existing.get("turns") or [])
 
         if isinstance(incoming, list):
@@ -312,6 +351,10 @@ def upsert_session():
         )
         if metrics_version > 0:
             new_record["metrics_version"] = metrics_version
+        if owner_generation is not None:
+            new_record["owner_generation"] = owner_generation
+        elif existing.get("owner_generation"):
+            new_record["owner_generation"] = existing["owner_generation"]
         # --- BLINK_ON_PERMISSIONS feature gate ---
         # When enabled, accept and persist an `awaiting` flag (true while the
         # session is blocked on a permission prompt). When disabled, the flag

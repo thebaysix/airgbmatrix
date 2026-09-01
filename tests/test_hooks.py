@@ -57,6 +57,7 @@ class HookTests(unittest.TestCase):
             env["PATH"] = f"{tmp_path}:{env['PATH']}"
             env["AIRGB_CAPTURE"] = str(capture)
             env["AIRGBMATRIX_RUNTIME_DIR"] = str(runtime_dir)
+            env["AIRGBMATRIX_DISABLE_WATCHDOG"] = "1"
             env["COPILOT_HOME"] = str(copilot_home)
             subprocess.run(
                 [str(NOTIFY), state],
@@ -136,6 +137,7 @@ class HookTests(unittest.TestCase):
             env = os.environ.copy()
             env["PATH"] = f"{tmp_path}:{env['PATH']}"
             env["AIRGB_CAPTURE"] = str(capture)
+            env["AIRGBMATRIX_DISABLE_WATCHDOG"] = "1"
             subprocess.run(
                 [str(NOTIFY), "stopped"],
                 input=json.dumps(payload),

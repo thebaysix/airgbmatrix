@@ -242,6 +242,105 @@ class ServerMergeTests(unittest.TestCase):
             "content-proxy",
         )
 
+    def test_stale_owner_cannot_close_resumed_session(self):
+        response = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "working",
+                "owner_generation": "boot-a:800:20",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+        resumed = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "working",
+                "owner_generation": "boot-a:900:30",
+            },
+        )
+        self.assertEqual(resumed.status_code, 200)
+
+        stale_close = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "closed",
+                "owner_generation": "boot-a:800:20",
+            },
+        )
+        self.assertEqual(stale_close.status_code, 200)
+        self.assertEqual(stale_close.get_json()["ignored"], "stale_owner")
+        self.assertIn("session-1", server._sessions)
+
+        current_close = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "closed",
+                "owner_generation": "boot-a:900:30",
+            },
+        )
+        self.assertEqual(current_close.status_code, 200)
+        self.assertNotIn("session-1", server._sessions)
+
+    def test_stale_state_update_cannot_roll_owner_generation_back(self):
+        for state, generation in (
+            ("working", "boot-a:800:20"),
+            ("working", "boot-a:900:30"),
+            ("stopped", "boot-a:800:20"),
+        ):
+            response = self.client.post(
+                "/session",
+                json={
+                    "id": "session-1",
+                    "state": state,
+                    "owner_generation": generation,
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(
+            server._sessions["session-1"]["owner_generation"],
+            "boot-a:900:30",
+        )
+        self.assertEqual(server._sessions["session-1"]["state"], "working")
+
+        close = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "closed",
+                "owner_generation": "boot-a:900:30",
+            },
+        )
+        self.assertEqual(close.status_code, 200)
+        self.assertNotIn("session-1", server._sessions)
+
+    def test_newer_owner_can_close_record_when_its_start_update_was_lost(self):
+        started = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "working",
+                "owner_generation": "boot-a:800:20",
+            },
+        )
+        self.assertEqual(started.status_code, 200)
+
+        newer_close = self.client.post(
+            "/session",
+            json={
+                "id": "session-1",
+                "state": "closed",
+                "owner_generation": "boot-a:900:30",
+            },
+        )
+        self.assertEqual(newer_close.status_code, 200)
+        self.assertNotIn("session-1", server._sessions)
+
 
 if __name__ == "__main__":
     unittest.main()

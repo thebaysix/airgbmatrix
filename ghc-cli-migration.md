@@ -21,6 +21,15 @@ Claude Code continues to load `~/.claude/settings.json`; start from
 | `agentStop` | `Stop` | `notify.sh stopped` |
 | `sessionEnd` | `SessionEnd` | `notify.sh closed` |
 
+Closing a terminal tab may kill the CLI before `sessionEnd` can run.
+`notify.sh` therefore starts one detached `session_watchdog.py` process per
+real session. The watcher follows the nearest Copilot/Claude ancestor using
+its PID plus Linux process start time, follows a replacement PID after resume,
+and posts `closed` when the owner disappears. State updates carry the same
+owner generation, allowing the server to reject a delayed close from a
+pre-resume process. This is a Linux/WSL liveness lease rather than an age
+timeout, so an open idle tab remains on the board indefinitely.
+
 Copilot's native hook payload uses `sessionId` and `transcriptPath`; Claude's
 uses `session_id` and `transcript_path`. Both accessors are accepted.
 Auxiliary Copilot agents can report a transient `sessionId` while sharing the

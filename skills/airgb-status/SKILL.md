@@ -46,8 +46,9 @@ Per session, compute:
 
 - **`tokens` is recent work volume.** Each turn's `tokens` field represents
   relative token use for that user turn. Sum the retained turns for an
-  at-a-glance recent total. Claude Code supplies API usage; Copilot CLI uses a
-  model-visible-content proxy because usage events are not persisted.
+  at-a-glance recent total. Claude Code supplies API usage. Copilot CLI uses
+  exact cache-excluded Agency usage when `session-store.db` is available and a
+  model-visible-content proxy otherwise.
 - **`turns` is capped, not a lifetime count.** The server keeps only the last
   **16** turns per session (`MAX_TURNS`), so `len(turns)` means "≥16" once it
   hits the cap. Render it as `≥16` (not a bare `16`) in that case so it isn't

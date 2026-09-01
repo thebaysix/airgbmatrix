@@ -175,13 +175,15 @@ LAN IP, which proxies into laptop WSL via mirrored networking (or
 sessions in memory plus a JSON file (`state.json`) for crash recovery. The
 board only ever shows currently-open sessions: a `state=closed` POST
 (SessionEnd) deletes the session record entirely, freeing its palette lease
-so the next session reusing the slot gets a fresh color. There's no
-background reaper — lifecycle is fully driven by hooks (`SessionStart`
-adds, `SessionEnd` removes) and the `/airgb-color` / `/airgb-clear`
-skills for manual cleanup. If an agent session ever exits without firing
-SessionEnd (server down at the time, kernel panic, etc.) the stale record
-just sticks around until you `/airgb-clear` it or it gets LRU-evicted
-by an 8th-and-9th session arriving. Endpoints:
+so the next session reusing the slot gets a fresh color. There is no
+age-based server reaper because an open idle tab is still a valid session.
+`SessionEnd` is the fast removal path; `session_watchdog.py` is detached from
+the terminal at each lifecycle hook and posts the same `closed` state when the
+owning Copilot/Claude process disappears. It uses PID start time to reject PID
+reuse, follows a replacement process on resume, and retries temporary server
+failures. Each state update carries that owner generation, so the server
+rejects a delayed close from a pre-resume process. `/airgb-clear` remains the
+manual recovery path. Endpoints:
 
 - `POST /session` — upsert a session by `id`. Optional `turns` array of
   `{msg_id, metrics_version, tokens, ts, added, removed}`; the server **upserts by `msg_id`**
@@ -216,7 +218,8 @@ one, because `colors.py` differs (CircuitPython has no `colorsys`). Outputs
 match bit-for-bit — verified by running `session_color()` from both modules
 against a fixed input set.
 
-**Hooks** (`hooks/*.sh`) — shared scripts for both lifecycle dialects.
+**Hooks** (`hooks/*.sh`, `hooks/*.py`) — shared scripts for both lifecycle
+dialects.
 Copilot CLI loads `~/.copilot/hooks/*.json` (see
 `hooks/copilot-hooks.json.example`); Claude Code loads
 `~/.claude/settings.json` (see `hooks/settings.json.example`).
@@ -331,6 +334,12 @@ parent's turn histogram.
 | `PreToolUse`       | `notify.sh tool-start`  | Permission-blink feature. No-op while   |
 |                    |                         | `BLINK_ON_PERMISSIONS=False` (current). |
 
+Every real lifecycle hook also refreshes a detached `session_watchdog.py`
+lease tied to the CLI process. Closing a terminal tab can kill the CLI before
+`sessionEnd` runs; the watchdog detects that exit and removes the board record
+within roughly four seconds. This requires Linux `/proc` and `setsid` (the
+documented WSL deployment); normal `SessionEnd` remains portable.
+
 Tab color persists past `SessionEnd` even though the board tile is removed —
 the OSC 4 escape stays in effect on the terminal until the tab is closed or
 explicitly reset. Add an OSC 104 reset to a `SessionEnd` hook if you'd
@@ -363,7 +372,8 @@ Two hosts, two installs.
 jq --version && curl --version | head -1
 
 # Make hooks executable
-chmod +x hooks/notify.sh hooks/tint_terminal.sh hooks/copilot_usage.py
+chmod +x hooks/notify.sh hooks/tint_terminal.sh hooks/copilot_usage.py \
+  hooks/session_watchdog.py
 
 # Copilot CLI: copy hooks/copilot-hooks.json.example to
 # ~/.copilot/hooks/airgb.json, then replace the absolute paths and host.
